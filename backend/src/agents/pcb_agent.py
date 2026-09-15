@@ -128,40 +128,47 @@ async def rename_project(new_name: str, project_id: str = "antimatter"):
 
 
 def detect_user_intent(prompt: str) -> str:
-    """Classify user intent into 'greeting', 'status_query', or 'hardware_design'."""
+    """Accurately classify user intent into 'greeting', 'design_catalog_request', 'status_query', or 'hardware_design'."""
     text = prompt.strip().lower()
     clean = "".join(c for c in text if c.isalnum() or c.isspace()).strip()
     words = clean.split()
 
-    # Short non-informative inputs (e.g. single letters "h", "a", "x", or <= 2 chars)
-    if len(clean) <= 2:
+    if not clean or len(clean) <= 2:
         return "greeting"
 
-    # Common greetings, salutations, casual queries
+    # Catalog request / asking for options or a list to choose from
+    catalog_markers = (
+        "give me a list", "list of design", "list of designs", "what can you build",
+        "what can you design", "let me choose", "show me options", "give me choices",
+        "show me a list", "show me examples", "what designs can you", "options to build",
+        "what can you do", "what are your capabilities", "show me what you can do"
+    )
+    if any(m in clean for m in catalog_markers) or ("list" in words and any(w in words for w in ("design", "designs", "choose", "choice", "circuits", "boards"))):
+        return "design_catalog_request"
+
+    # Short greetings or salutations
     greetings = {
         "hi", "hello", "hey", "heya", "howdy", "yo", "greetings", "good morning",
-        "good afternoon", "good evening", "what can you do", "who are you",
-        "help", "test", "ping", "start", "welcome", "sup", "whats up", "what's up",
-        "h", "ok", "okay", "thanks", "thank you", "cool"
+        "good afternoon", "good evening", "welcome", "sup", "whats up", "what's up"
     }
-    if clean in greetings or (words and words[0] in ("hi", "hello", "hey", "yo", "welcome") and len(words) <= 3):
+    if clean in greetings or (words and words[0] in greetings and len(words) <= 2):
         return "greeting"
 
-    # Status / informational queries
+    # Informational or status queries
     if any(clean.startswith(q) for q in ("where is", "what is", "how do", "why does", "show me", "tell me", "explain", "who is", "what are", "status")):
-        if not any(w in clean for w in ("create", "build", "design", "make", "add", "place", "wire", "route")):
+        if not any(w in words for w in ("create", "build", "design", "make", "add", "place", "wire", "route")):
             return "status_query"
 
-    # Hardware design keywords
-    design_keywords = (
-        "design", "build", "create", "add", "make", "generate", "route", "connect", "wire",
+    # Explicit hardware design request (must have action verb + target)
+    action_verbs = {"design", "build", "create", "add", "make", "generate", "route", "connect", "wire", "synthesize", "place"}
+    design_targets = {
         "sensor", "board", "pcb", "schematic", "power", "esp32", "rp2040", "stm32", "nordic",
         "nrf", "mcu", "converter", "charger", "node", "circuit", "telemetry", "usb", "ldo",
         "regulator", "buck", "boost", "resistor", "capacitor", "transistor", "mosfet",
         "led", "i2c", "spi", "uart", "microcontroller", "temp", "thermal", "battery", "ble",
-        "wifi", "lora", "antenna", "crystal", "oscillator", "diode", "header", "connector"
-    )
-    if any(w in clean for w in design_keywords):
+        "wifi", "lora", "antenna", "crystal", "oscillator", "diode", "header", "connector", "tracks", "traces"
+    }
+    if any(v in words for v in action_verbs) and any(t in words or t in clean for t in design_targets):
         return "hardware_design"
 
     return "conversational"
@@ -197,14 +204,36 @@ At the very beginning of any hardware design task, you MUST state an explicit Go
 
 You must actively update and check off each TODO as you achieve it.
 CRITICAL MANDATES:
-1. ALWAYS USE THE POPUP QUESTION MODAL FOR ALL QUESTIONS & PERMISSIONS:
+1. ALWAYS UNDERSTAND HUMAN MESSAGE AND INTENT (NEVER EXECUTE A RIGID PRE-RECORDED SCRIPT):
+You must always carefully read, understand, and address the human engineer's specific words, questions, context, and intent.
+DO NOT act like a pre-recorded script that blindly executes the same steps regardless of what the user asked!
+- If the user asks what you can do, asks for ideas, or asks: "give me a list of designs you can do, let me choose":
+  DO NOT start placing components on the board!
+  Instead:
+  a) Provide an exciting, well-structured catalog of diverse electronic circuit architectures you can build (e.g. ESP32-C3 environmental sensor node with I2C SHT40, USB-C 5V to 3.3V 600mA power supply with AP2112K, RP2040 dual-core controller carrier, LiPo battery charger with protection, Buck converter 12V-to-5V 2A).
+  b) Invoke `request_human_decision` with these concrete options so the engineer can choose which circuit to design via the interactive popup modal!
+- If the user asks a question, gives feedback, or requests a specific modification: address their message directly and perform only the requested modification.
+- Never force an autonomous multi-stage board synthesis until the user has actually chosen or instructed a specific hardware circuit to design!
+
+2. MANDATORY COMPLETION REPORT: OUTPUT WHAT YOU HAVE DONE:
+Whenever you conclude performing design actions, adding components, connecting wires, routing traces, running DRC, or updating CAD files, you MUST ALWAYS output a comprehensive, structured report detailing everything you have done:
+- 🛠️ Completed Actions: Clear summary of every operation performed on the circuit.
+- 📦 Implemented Components: Every component placed with Reference Designator (RefDes), MPN/Value, Package/Footprint, board coordinates, and technical function.
+- ⚡ Netlist Wiring: Exact pin-to-net connections established (GND ground planes, power delivery rails e.g. +3V3/VBUS, decoupling bypasses, data/comm buses).
+- 🛣️ Copper Trace Routing: Physical tracks routed (layers F.Cu / B.Cu, widths for power vs signal, ground pour return paths).
+- 🛡️ Verification & DRC/ERC Testing: Test results confirming 0 clearance violations, 0 unconnected pins, and proper netlist integrity.
+- 📋 Production Bill of Materials (BOM):
+  | RefDes | MPN / Value | Package / Footprint | Description | Status |
+Never conclude silently, with an empty message, or with a single brief sentence. Always clearly output what you have done!
+
+3. ALWAYS USE THE POPUP QUESTION MODAL FOR ALL QUESTIONS & PERMISSIONS:
 Whenever you need to ask the human engineer a question, clarify ambiguous requirements, ask for user preference (e.g. MCU family, battery vs USB power, bus accuracy, pinout selection), or ask for permission before modifying/overwriting files or executing sensitive actions:
 YOU ARE STRICTLY FORBIDDEN FROM ASKING IN CHAT TEXT OR MARKDOWN PROSE!
 You MUST ALWAYS invoke the `request_human_decision` tool with your question, concrete options, and your recommendation.
 This immediately renders an interactive popup modal for the engineer.
 Never write questions out in chat text without calling `request_human_decision`.
 
-2. ALWAYS CALL TOOLS DIRECTLY - DO NOT WRITE MONOLOGUES OR IDLE THOUGHTS:
+4. ALWAYS CALL TOOLS DIRECTLY - DO NOT WRITE MONOLOGUES OR IDLE THOUGHTS:
 You are an autonomous hardware engineering execution engine, NOT a conversational chatbot. Do NOT write long paragraphs explaining what you could do or theorizing about circuits. You must execute each step by immediately calling the appropriate tools:
 - `rename_project` to establish a clean engineering title.
 - `request_human_decision` for ANY questions, choices, or permissions (via popup modal).
@@ -216,9 +245,9 @@ You are an autonomous hardware engineering execution engine, NOT a conversationa
 - `run_drc` to execute DRC/ERC verification.
 The ONLY raw markdown text you should output is the final comprehensive Engineering Report & BOM, or KiCad S-expressions when updating CAD files!
 
-3. ALWAYS ROUTE COPPER TRACES: It is strictly forbidden to only define nets without routing copper traces. You MUST call `route_track` for ground planes, power rails (+3V3, +5V, VBUS), and critical signal tracks (I2C, SPI, UART, CC lines).
-4. ALWAYS PERFORM DRC AND ERC: You MUST call `run_drc` before concluding your work. If any DRC or ERC errors are detected, fix them and re-run `run_drc` until verified clean.
-5. NEVER GET STUCK IN A LOOP: Execute each phase with purpose. Do not call the same tool with identical arguments repeatedly. After research, immediately propose the plan; after placement, immediately wire and route traces; after wiring, run DRC/ERC and deliver the final report with the Bill of Materials (BOM).
+5. ALWAYS ROUTE COPPER TRACES: It is strictly forbidden to only define nets without routing copper traces. You MUST call `route_track` for ground planes, power rails (+3V3, +5V, VBUS), and critical signal tracks (I2C, SPI, UART, CC lines).
+6. ALWAYS PERFORM DRC AND ERC: You MUST call `run_drc` before concluding your work. If any DRC or ERC errors are detected, fix them and re-run `run_drc` until verified clean.
+7. NEVER GET STUCK IN A LOOP: Execute each phase with purpose. Do not call the same tool with identical arguments repeatedly. After research, immediately propose the plan; after placement, immediately wire and route traces; after wiring, run DRC/ERC and deliver the final report with the Bill of Materials (BOM).
 
 ================================================================================
 ANTIMATTER MULTI-TURN ENGINEERING LIFECYCLE (MANDATORY CONTINUOUS PROTOCOL)
@@ -965,31 +994,12 @@ class PCBAgent:
             clean_model = "openrouter/auto"
 
         intent = detect_user_intent(prompt)
-        if intent == "greeting":
-            logger.info("👋 [Greeting Handled] Answering conversationally without hardware modifications.")
-            greeting_text = (
-                "Hello! I am Antimatter, your AI Hardware Systems Architect.\n\n"
-                "Tell me about the electronic circuit, embedded system, or PCB board you'd like to build today—for example:\n"
-                "- *'Design an ESP32-C3 environmental sensor with I2C SHT40 temperature sensing'*\n"
-                "- *'Build a USB-C 5V to 3.3V 600mA power delivery circuit with AP2112K'*\n"
-                "- *'Create an RP2040 dual-core microcontroller carrier board'*\n\n"
-                "I will formulate the architecture, verify real components, synthesize the schematic and PCB layout, and generate the Bill of Materials (BOM)."
-            )
+        if not prompt.strip():
+            welcome_text = "Hello! I am Antimatter, your AI Hardware Systems Architect. How can I help you design, inspect, or route your electronic circuit today?"
             yield {
                 "type": "final_message",
-                "content": greeting_text,
+                "content": welcome_text,
             }
-            db_manager.save_chat_message(project_id, {
-                "role": "user",
-                "content": prompt,
-                "user_id": user_id,
-            })
-            db_manager.save_chat_message(project_id, {
-                "role": "assistant",
-                "content": greeting_text,
-                "tool_calls": [],
-                "user_id": user_id,
-            })
             return
 
         # Fully managed platform: ensure server-side configured keys are loaded
@@ -1023,22 +1033,32 @@ class PCBAgent:
         )
 
         user_content: Any = prompt
-        if intent == "hardware_design":
+        if intent == "design_catalog_request":
+            user_content = (
+                f"{prompt}\n\n"
+                f"[Engineer Guidance - Design Catalog & Selection Request]:\n"
+                f"The human engineer is asking for a list of designs or choices to build. Do NOT blindly place components on the board yet.\n"
+                f"1. Give an inspiring, concise catalog of 4-5 diverse hardware architectures (e.g. ESP32-C3 environmental sensor node, USB-C 5V-to-3.3V power module with AP2112K, RP2040 dual-core carrier board, LiPo battery charger with protection).\n"
+                f"2. Invoke `request_human_decision` with these designs as selectable options so the engineer can easily choose via the popup modal!"
+            )
+        elif intent == "hardware_design":
             instructions = (
                 f"{prompt}\n\n"
-                f"[Autonomous Engineering Protocol - Mandatory Electrical Wiring, ERC & DRC Testing]:\n"
+                f"[Autonomous Engineering Protocol - Mandatory Electrical Wiring, Copper Trace Routing & DRC Testing]:\n"
                 f"1. Autonomous Placement: Place all required components using `add_component`.\n"
                 f"2. Wire Electrical Connections: While designing, you MUST call `connect_pin_to_net` (single or batch `connections: [{{'ref': '...', 'pin': '...', 'net_name': '...'}}]`) to connect ALL wires between component pins (GND copper plane, power rails like +3V3/VBUS, and communication lines). A board with floating pins will fail ERC!\n"
-                f"3. Run ERC & DRC Testing: While designing, you MUST call `run_drc` to execute Electrical Rules Check (ERC) and Design Rules Check (DRC). Verify that all nets are connected, with 0 floating pins and 0 clearance violations.\n"
-                f"4. Mandatory Completion Breakdown: When all components are placed, all wires are connected, and DRC/ERC passes, give us a full breakdown of what you have done, including:\n"
+                f"3. Route Physical Copper Tracks: You MUST call `route_track` to lay physical copper tracks on F.Cu / B.Cu for power and signals.\n"
+                f"4. Run ERC & DRC Testing: You MUST call `run_drc` to execute Electrical Rules Check (ERC) and Design Rules Check (DRC). Verify that all nets are connected, with 0 floating pins and 0 clearance violations.\n"
+                f"5. Mandatory Completion Breakdown: When all components are placed, all wires are connected, tracks routed, and DRC/ERC passes, output a full breakdown of what you have done, including:\n"
                 f"   - Executive Summary & Circuit Architecture\n"
                 f"   - Power Distribution Tree (VBUS, regulation, rails, decoupling)\n"
                 f"   - Placed Components & Layout Strategy (Exact RefDes, values, packages, coordinates)\n"
-                f"   - Netlist Wiring & Routing Connectivity\n"
+                f"   - Netlist Wiring & Copper Track Routing\n"
                 f"   - DRC & ERC Verification Results (0 clearance errors, all nets connected)\n"
                 f"   - Complete Production Bill of Materials (BOM) Table:\n"
                 f"     | RefDes | MPN / Value | Package / Footprint | Description | Status |"
             )
+            user_content = instructions
             if image_data:
                 yield {
                     "type": "thought",
@@ -1559,15 +1579,15 @@ class PCBAgent:
             }
             final_text = err_text
 
-        # Ensure all wires are connected and DRC is verified
-        if len(state.components) >= 1:
+        # Ensure all wires are connected and DRC is verified when designing hardware
+        if len(state.components) >= 1 and intent == "hardware_design":
             wire_standard_circuit_nets(state)
             state.run_drc()
             await db_manager.save_project_async(project_id, state.model_dump())
 
-        # Fallback synthesis: guarantee user always receives the breakdown and BOM
+        # Fallback synthesis: guarantee user receives the breakdown and BOM when designing hardware
         if not final_text or ("| RefDes |" not in final_text and "| Ref |" not in final_text and "Bill of Materials" not in final_text):
-            if len(state.components) >= 1:
+            if len(state.components) >= 1 and intent == "hardware_design":
                 final_text = self._build_engineering_breakdown(state, prompt, final_text)
 
         # Emit final synthesized message if not emitted by error
