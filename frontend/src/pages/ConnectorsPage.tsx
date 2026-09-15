@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getApiBase } from '../lib/apiConfig';
 
 interface ConnectorItem {
   id: string;
@@ -24,12 +25,6 @@ const CATEGORY_META: Record<string, { label: string; icon: string; color: string
   custom: { label: 'Enterprise Custom', icon: '🏢', color: '#ec4899' },
 };
 
-const getApiBase = () => {
-  if (typeof window !== 'undefined' && window.location.hostname) {
-    return `http://${window.location.hostname}:8000/api`;
-  }
-  return 'http://localhost:8000/api';
-};
 
 export const ConnectorsPage: React.FC = () => {
   const [connectors, setConnectors] = useState<ConnectorItem[]>([]);

@@ -184,6 +184,24 @@ SYSTEM_PROMPT = """You are Antimatter, an elite Electronic Design Automation (ED
 You design production-ready schematics, place components logically, route PCB copper traces, synthesize KiCad 8 S-expressions, verify Design Rules (DRC), and generate manufacturing deliverables.
 
 ================================================================================
+AUTONOMOUS GOAL & TODO EXECUTION PROTOCOL (MANDATORY ON EVERY TASK)
+================================================================================
+At the very beginning of any hardware design task, you MUST state an explicit Goal and a structured 5-Phase TODO checklist:
+- Goal: Concise technical objective of the circuit or hardware module.
+- TODO Checklist:
+  [ ] 1. Research & Component Specification Verification
+  [ ] 2. Architectural Design Plan & Engineering Change Order (ECO)
+  [ ] 3. Component Placement & Decoupling Strategy
+  [ ] 4. Electrical Netlist Wiring & MANDATORY Trace Routing (Every design MUST route physical copper traces)
+  [ ] 5. DRC & ERC Verification Testing (Zero clearance violations, zero unconnected pins)
+
+You must actively update and check off each TODO as you achieve it.
+CRITICAL MANDATES:
+1. ALWAYS ROUTE COPPER TRACES: It is strictly forbidden to only define nets without routing copper traces. You MUST call `route_track` for ground planes, power rails (+3V3, +5V, VBUS), and critical signal tracks (I2C, SPI, UART, CC lines).
+2. ALWAYS PERFORM DRC AND ERC: You MUST call `run_drc` before concluding your work. If any DRC or ERC errors are detected, fix them and re-run `run_drc` until verified clean.
+3. NEVER GET STUCK IN A LOOP: Execute each phase with purpose. Do not call the same tool with identical arguments repeatedly. After research, immediately propose the plan; after placement, immediately wire and route traces; after wiring, run DRC/ERC and deliver the final report with the Bill of Materials (BOM).
+
+================================================================================
 ANTIMATTER MULTI-TURN ENGINEERING LIFECYCLE (MANDATORY CONTINUOUS PROTOCOL)
 ================================================================================
 Hardware design is an iterative, multi-turn engineering discipline. DO NOT rush a one-turn finish. You must work across turns:
@@ -216,22 +234,27 @@ TURN 4: MANDATORY ELECTRICAL WIRING & NETLIST CONNECTIONS
   * Connect power rails (+3V3, +5V, VBUS) to VDD/VIN pins and adjacent decoupling capacitors.
   * Connect signal buses (I2C SDA/SCL, SPI, UART, CC lines).
   * Pro-Tip: You can pass a `connections: [{"ref": "...", "pin": "...", "net_name": "..."}]` array to `connect_pin_to_net` to wire all pins in a single batch call!
-- Call `route_track` for critical power rails and signal traces.
 
-TURN 5+: MANDATORY ERC & DRC TESTING WHILE DESIGNING
+TURN 5: MANDATORY PHYSICAL COPPER TRACE ROUTING
+- You MUST call `route_track` to route physical copper tracks for all critical nets:
+  * Route ground return paths and power delivery traces (width 0.4mm - 0.8mm for power).
+  * Route differential or high-speed / signal traces (width 0.25mm) between IC pins and headers/connectors.
+  * Do not leave nets unrouted on the board layers!
+
+TURN 6+: MANDATORY ERC & DRC TESTING WHILE DESIGNING
 - You MUST call `run_drc` to execute Electrical Rules Check (ERC) and Design Rules Check (DRC).
 - ERC tests for unconnected/floating pins and dangerous power-ground shorts.
 - DRC tests for component boundary clearance and out-of-bounds layout issues.
-- If `run_drc` finds any unconnected pins or clearance errors, you MUST call `connect_pin_to_net` to wire them and re-verify until 0 errors remain!
-- NEVER conclude designing without running DRC/ERC and ensuring all wires are connected!
+- If `run_drc` finds any unconnected pins or clearance errors, you MUST call `connect_pin_to_net` or `route_track` to wire them and re-verify until 0 errors remain!
+- NEVER conclude designing without running DRC/ERC and ensuring all wires and tracks are verified!
 
 FINAL TURN: MANDATORY COMPREHENSIVE ENGINEERING REPORT & BOM
-- Only when the circuit is fully placed, wired, and verified with ERC/DRC do you conclude your synthesis.
+- Only when the circuit is fully placed, wired, trace-routed, and verified with ERC/DRC do you conclude your synthesis.
 - When you are done, NEVER conclude silently, with an empty message, or with a single brief sentence. You MUST give the user a complete, thorough engineering breakdown of everything you have done:
   * Executive Summary & Circuit Architecture
   * Power Distribution Tree (Input voltage, regulation, rails, bypass filtering)
   * Placed Components & Layout Strategy (Exact RefDes, values, packages, coordinates, thermal decoupling)
-  * Netlist Wiring & Signal Routing (Power planes, signal traces, ground strategy)
+  * Netlist Wiring & Copper Trace Routing (Power planes, signal traces, ground strategy, layer assignments)
   * DRC & ERC Verification Results (0 clearance errors, all nets connected)
   * Complete, production-grade Bill of Materials (BOM) in markdown table format:
     | RefDes | MPN / Value | Package / Footprint | Description | Status |
@@ -964,6 +987,8 @@ class PCBAgent:
             yield {"type": "final_message", "content": err_msg}
             return
 
+        recent_tool_signatures: List[str] = []
+
         # Build dynamic context with active project and approval mode
         system_context = (
             f"{SYSTEM_PROMPT}\n\n"
@@ -1027,6 +1052,11 @@ class PCBAgent:
 
         logger.info("🚀 [Agent Start] Project='%s' | Model='%s' | ApprovalMode='%s' | Prompt='%s'", project_id, clean_model, approval_mode, prompt[:100].replace('\n', ' '))
 
+        yield {
+            "type": "thought",
+            "content": f"Connected to model: {clean_model}. Analyzing circuit requirements...",
+        }
+
         client = AsyncOpenAI(
             api_key=effective_api_key,
             base_url=effective_base_url,
@@ -1060,10 +1090,9 @@ class PCBAgent:
                     if reasoning:
                         yield {"type": "thought", "content": reasoning}
 
-                    # 2. Text tokens
+                    # 2. Text tokens (streamed only as content_delta to user, never as thought)
                     if delta.content:
                         accumulated_content += delta.content
-                        yield {"type": "thought", "content": delta.content}
                         yield {"type": "content_delta", "delta": delta.content}
 
                     # Accumulate tool calls
@@ -1093,6 +1122,7 @@ class PCBAgent:
                     has_plan = bool(state.pending_eco or (db_manager.get_design_plans(project_id) and len(db_manager.get_design_plans(project_id)) > 0))
                     has_components = len(state.components) >= 2
                     has_nets = len(state.nets) >= 2 and (connected_pins >= 4 or (total_pins > 0 and connected_pins / total_pins >= 0.4))
+                    has_traces = len(state.tracks) >= 2
                     has_drc = any(tc.get("tool") == "run_drc" for tc in captured_tool_calls)
 
                     if intent == "hardware_design" and turn < max_turns:
@@ -1136,15 +1166,28 @@ class PCBAgent:
                                 ),
                             })
                             continue
-                        elif approval_mode == "auto_approve" and not has_drc:
-                            logger.info("🤖 [Multi-Turn Steering Turn %d] Prompting model to run ERC/DRC verification testing.", turn)
-                            conversation_history.append({"role": "assistant", "content": accumulated_content or "Wiring completed."})
+                        elif approval_mode == "auto_approve" and not has_traces:
+                            logger.info("🤖 [Multi-Turn Steering Turn %d] Prompting model to route physical copper tracks.", turn)
+                            conversation_history.append({"role": "assistant", "content": accumulated_content or "Wires established."})
                             conversation_history.append({
                                 "role": "user",
                                 "content": (
-                                    "Autonomous Engineering Protocol (Stage 5 - ERC & DRC Verification Testing):\n"
+                                    "Autonomous Engineering Protocol (Stage 5 - Mandatory Copper Trace Routing):\n"
+                                    "You have established electrical nets, but physical copper tracks have NOT been routed on the PCB layers!\n"
+                                    "You MUST invoke `route_track` to lay copper traces for power rails (+3V3, VBUS, GND) and signal nets on F.Cu or B.Cu.\n"
+                                    "Every production PCB requires physically routed copper tracks."
+                                ),
+                            })
+                            continue
+                        elif approval_mode == "auto_approve" and not has_drc:
+                            logger.info("🤖 [Multi-Turn Steering Turn %d] Prompting model to run ERC/DRC verification testing.", turn)
+                            conversation_history.append({"role": "assistant", "content": accumulated_content or "Copper tracks routed."})
+                            conversation_history.append({
+                                "role": "user",
+                                "content": (
+                                    "Autonomous Engineering Protocol (Stage 6 - ERC & DRC Verification Testing):\n"
                                     "Call `run_drc` now to test Electrical Rules Check (ERC) and Design Rules Check (DRC).\n"
-                                    "Verify that all electrical connections are complete and there are 0 clearance violations and 0 unconnected pins."
+                                    "Verify that all electrical connections and tracks are complete and there are 0 clearance violations and 0 unconnected pins."
                                 ),
                             })
                             continue
@@ -1214,11 +1257,82 @@ class PCBAgent:
                     captured_tool_calls.append({"tool": t_name, "input": t_args})
                     logger.info("⚙️  [Tool Call] '%s' | Input: %s", t_name, json.dumps(t_args)[:130])
 
+                    # Stream active state change so the agent is never silent during operations
+                    def describe_activity(name: str, args: dict) -> tuple[str, str]:
+                        if name == "search_web_for_components":
+                            q = args.get("query", "components")
+                            return "Researching", f"Searching component specs for '{q}'..."
+                        elif name == "fetch_datasheet_page":
+                            url = args.get("url", "")
+                            return "Researching", f"Fetching component datasheet: {url[:36]}..."
+                        elif name == "lookup_component":
+                            val = args.get("name") or args.get("component_name") or "component"
+                            return "Researching", f"Verifying pinout & footprint specs for {val}..."
+                        elif name == "propose_design_plan":
+                            title = args.get("title", "Engineering Change Order")
+                            return "Planning", f"Formulating architectural plan: {title}..."
+                        elif name == "get_board_state":
+                            return "Working", "Inspecting board geometry, dimensions, and outline..."
+                        elif name == "add_component":
+                            ref = args.get("ref", "component")
+                            val = args.get("value", "")
+                            return "Working", f"Placing component {ref} ({val}) with decoupling layout..."
+                        elif name == "connect_pin_to_net":
+                            conns = args.get("connections") or []
+                            count = len(conns) if isinstance(conns, list) else 1
+                            return "Working", f"Wiring netlist connections ({count} pin nets)..."
+                        elif name == "route_track":
+                            net = args.get("net_name", "trace")
+                            layer = args.get("layer", "F.Cu")
+                            return "Routing", f"Routing physical copper trace for net '{net}' on {layer}..."
+                        elif name == "run_drc":
+                            return "Verifying", "Executing Electrical Rules Check (ERC) & Design Rules Check (DRC)..."
+                        elif name == "rename_project":
+                            return "Working", f"Setting project hardware title: {args.get('new_name', '')}..."
+                        elif name == "request_human_decision":
+                            return "Awaiting Input", "Requesting engineer decision on architecture trade-off..."
+                        else:
+                            return "Working", f"Executing {name}..."
+
+                    state_title, activity_msg = describe_activity(t_name, t_args)
+                    yield {
+                        "type": "thought",
+                        "content": f"⚡ [{state_title}] {activity_msg}",
+                    }
+                    yield {
+                        "type": "agent_state",
+                        "state": state_title,
+                        "activity": activity_msg,
+                        "tool": t_name,
+                    }
+
                     yield {
                         "type": "tool_call",
                         "tool": t_name,
                         "input": t_args,
                     }
+
+                    # Loop detection: intercept tool calls repeated identically 3+ times
+                    call_sig = f"{t_name}:{json.dumps(t_args, sort_keys=True)}"
+                    recent_tool_signatures.append(call_sig)
+                    is_loop = recent_tool_signatures.count(call_sig) >= 3
+                    if is_loop and t_name != "request_human_decision":
+                        logger.warning("🛑 [Loop Intercepted] Tool '%s' called 3+ times with identical args.", t_name)
+                        tool_result = {
+                            "status": "loop_intercepted",
+                            "message": f"Action '{t_name}' was already performed with these exact parameters. DO NOT repeat. Advance immediately to the next phase on your TODO list (placement, net wiring, route_track copper traces, or run_drc).",
+                        }
+                        yield {
+                            "type": "tool_result",
+                            "tool": t_name,
+                            "result": tool_result,
+                        }
+                        conversation_history.append({
+                            "role": "tool",
+                            "name": t_name,
+                            "content": json.dumps(tool_result),
+                        })
+                        continue
 
                     if t_name == "request_human_decision":
                         if questions_asked_count >= MAX_QUESTIONS_ALLOWED:

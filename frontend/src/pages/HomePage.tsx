@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { ApprovalMode } from '../types/eda';
+import { getApiBase } from '../lib/apiConfig';
+import { StopAgentModal } from '../components/StopAgentModal';
 
 // ── OpenRouter model catalogue with rich EDA metadata ────────────────────────
 export interface OpenRouterModel {
@@ -11,7 +13,7 @@ export interface OpenRouterModel {
   badgeColor?: string;
   context: string;
   description: string;
-  category: 'auto' | 'anthropic' | 'openai' | 'google' | 'opensource';
+  category: string;
 }
 
 export const OPENROUTER_MODELS: OpenRouterModel[] = [
@@ -159,6 +161,7 @@ interface ComposerProps {
   autoFocus?: boolean;
   /** compact = workspace inline mode (no outer card shadow) */
   compact?: boolean;
+  onStopAgent?: () => void;
 }
 
 export const Composer: React.FC<ComposerProps> = ({
@@ -171,6 +174,7 @@ export const Composer: React.FC<ComposerProps> = ({
   onApprovalModeChange,
   autoFocus = false,
   compact = false,
+  onStopAgent,
 }) => {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
@@ -178,6 +182,30 @@ export const Composer: React.FC<ComposerProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<string>('all');
   const [showAttachmentHelp, setShowAttachmentHelp] = useState(false);
+  const [showStopModal, setShowStopModal] = useState(false);
+  const [allModels, setAllModels] = useState<OpenRouterModel[]>(OPENROUTER_MODELS);
+
+  useEffect(() => {
+    fetch(`${getApiBase()}/models`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (d && Array.isArray(d.models) && d.models.length > 0) {
+          const mapped: OpenRouterModel[] = d.models.map((m: any) => ({
+            id: m.id,
+            label: m.name || m.label || m.id,
+            sub: m.provider || m.author || m.sub || 'OpenRouter',
+            provider: m.provider || 'OpenRouter',
+            badge: m.badge || (m.multimodal ? 'VISION' : undefined),
+            badgeColor: m.badgeColor || '#00e5ff',
+            context: m.context_length ? `${Math.round(m.context_length / 1000)}k` : (m.context || '128k'),
+            description: m.description || `High-performance OpenRouter model (${m.id})`,
+            category: m.category || 'other',
+          }));
+          setAllModels(mapped);
+        }
+      })
+      .catch(() => { /* keep defaults */ });
+  }, []);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -319,16 +347,20 @@ export const Composer: React.FC<ComposerProps> = ({
     setAttachments([]);
   };
 
-  const activeModel = OPENROUTER_MODELS.find((m) => m.id === selectedModel) ?? OPENROUTER_MODELS[0];
+  const activeModel = allModels.find((m) => m.id === selectedModel) ?? allModels[0] ?? OPENROUTER_MODELS[0];
 
-  const filteredModels = OPENROUTER_MODELS.filter((m) => {
-    const matchesCategory = activeCategory === 'all' || m.category === activeCategory;
+  const filteredModels = allModels.filter((m) => {
+    const matchesCategory =
+      activeCategory === 'all' ||
+      m.category === activeCategory ||
+      (activeCategory === 'opensource' && ['meta', 'mistral', 'qwen', 'deepseek', 'opensource'].includes(m.category));
     const q = searchQuery.toLowerCase().trim();
     const matchesQuery =
       !q ||
       m.label.toLowerCase().includes(q) ||
       m.provider.toLowerCase().includes(q) ||
       m.description.toLowerCase().includes(q) ||
+      m.id.toLowerCase().includes(q) ||
       (m.badge && m.badge.toLowerCase().includes(q));
     return matchesCategory && matchesQuery;
   });
@@ -736,13 +768,17 @@ export const Composer: React.FC<ComposerProps> = ({
               />
 
               {/* Category pills */}
-              <div style={{ display: 'flex', gap: '4px', overflowX: 'auto', paddingBottom: '2px' }}>
+              <div style={{ display: 'flex', gap: '4px', overflowX: 'auto', paddingBottom: '4px' }}>
                 {[
-                  { id: 'all', label: 'All' },
+                  { id: 'all', label: `All (${allModels.length})` },
                   { id: 'auto', label: 'Auto' },
-                  { id: 'anthropic', label: 'Anthropic' },
                   { id: 'openai', label: 'OpenAI' },
+                  { id: 'anthropic', label: 'Anthropic' },
                   { id: 'google', label: 'Google' },
+                  { id: 'deepseek', label: 'DeepSeek' },
+                  { id: 'meta', label: 'Meta' },
+                  { id: 'mistral', label: 'Mistral' },
+                  { id: 'qwen', label: 'Qwen' },
                   { id: 'opensource', label: 'Open Source' },
                 ].map((cat) => (
                   <button
@@ -880,37 +916,67 @@ export const Composer: React.FC<ComposerProps> = ({
           </div>
         )}
 
-        {/* Submit button */}
-        <button
-          onClick={handleSubmit}
-          disabled={isStreaming || (!text.trim() && attachments.length === 0)}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '8px 18px',
-            borderRadius: '9px',
-            border: 'none',
-            background: isStreaming || (!text.trim() && attachments.length === 0) ? '#131a27' : '#00e5ff',
-            color: isStreaming || (!text.trim() && attachments.length === 0) ? '#334155' : '#050b14',
-            cursor: isStreaming || (!text.trim() && attachments.length === 0) ? 'not-allowed' : 'pointer',
-            fontSize: '13px',
-            fontWeight: 700,
-            boxShadow: !isStreaming && (text.trim() || attachments.length > 0) ? '0 0 16px rgba(0,229,255,0.3)' : 'none',
-            transition: 'all 0.15s',
-            flexShrink: 0,
-          }}
-        >
-          {isStreaming ? (
-            <>
-              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#334155', animation: 'pulse 1s infinite' }} />
-              Building…
-            </>
-          ) : (
-            <>⚡ Engineer It</>
-          )}
-        </button>
+        {/* Submit or Stop button */}
+        {isStreaming ? (
+          <button
+            type="button"
+            onClick={() => setShowStopModal(true)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 18px',
+              borderRadius: '9px',
+              border: '1px solid rgba(239, 68, 68, 0.6)',
+              background: 'rgba(239, 68, 68, 0.18)',
+              color: '#fca5a5',
+              cursor: 'pointer',
+              fontSize: '13px',
+              fontWeight: 700,
+              boxShadow: '0 0 16px rgba(239, 68, 68, 0.3)',
+              transition: 'all 0.15s',
+              flexShrink: 0,
+            }}
+          >
+            <span style={{ fontSize: '10px' }}>■</span>
+            <span>Stop Agent</span>
+          </button>
+        ) : (
+          <button
+            onClick={handleSubmit}
+            disabled={!text.trim() && attachments.length === 0}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 18px',
+              borderRadius: '9px',
+              border: 'none',
+              background: (!text.trim() && attachments.length === 0) ? '#131a27' : '#00e5ff',
+              color: (!text.trim() && attachments.length === 0) ? '#334155' : '#050b14',
+              cursor: (!text.trim() && attachments.length === 0) ? 'not-allowed' : 'pointer',
+              fontSize: '13px',
+              fontWeight: 700,
+              boxShadow: (text.trim() || attachments.length > 0) ? '0 0 16px rgba(0,229,255,0.3)' : 'none',
+              transition: 'all 0.15s',
+              flexShrink: 0,
+            }}
+          >
+            ⚡ Engineer It
+          </button>
+        )}
       </div>
+
+      {showStopModal && (
+        <StopAgentModal
+          isOpen={showStopModal}
+          onCancel={() => setShowStopModal(false)}
+          onConfirmStop={() => {
+            setShowStopModal(false);
+            onStopAgent?.();
+          }}
+        />
+      )}
     </div>
   );
 };
@@ -922,6 +988,8 @@ interface HomePageProps {
   onSelectModel: (id: string) => void;
   approvalMode?: ApprovalMode;
   onApprovalModeChange?: (mode: ApprovalMode) => void;
+  isStreaming?: boolean;
+  onStopAgent?: () => void;
 }
 
 export const HomePage: React.FC<HomePageProps> = ({
@@ -930,6 +998,8 @@ export const HomePage: React.FC<HomePageProps> = ({
   onSelectModel,
   approvalMode = 'request_approval',
   onApprovalModeChange,
+  isStreaming = false,
+  onStopAgent,
 }) => {
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
@@ -1010,6 +1080,8 @@ export const HomePage: React.FC<HomePageProps> = ({
           onSelectModel={onSelectModel}
           approvalMode={approvalMode}
           onApprovalModeChange={onApprovalModeChange}
+          isStreaming={isStreaming}
+          onStopAgent={onStopAgent}
           autoFocus
           placeholder="e.g. 5V USB-C to 3.3V power delivery for an ESP32 with status LED, or attach a schematic sketch / datasheet…"
         />

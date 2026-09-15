@@ -365,6 +365,21 @@ class DatabaseManager:
 
         return True
 
+    async def approve_design_plans_async(self, project_id: str, plan_id: str = "all") -> bool:
+        """Asynchronously approve design plans without blocking the event loop."""
+        import asyncio
+        return await asyncio.to_thread(self.approve_design_plans, project_id, plan_id)
+
+    async def save_project_async(self, project_id: str, data: Dict[str, Any], user_id: Optional[str] = None) -> bool:
+        """Asynchronously persist project without blocking the event loop."""
+        import asyncio
+        return await asyncio.to_thread(self.save_project, project_id, data, user_id)
+
+    async def get_design_plans_async(self, project_id: str) -> List[Dict[str, Any]]:
+        """Asynchronously get design plans without blocking the event loop."""
+        import asyncio
+        return await asyncio.to_thread(self.get_design_plans, project_id)
+
     def reject_design_plans(self, project_id: str, plan_id: str = "all") -> bool:
         """Mark design plans as rejected for a specific project in local cache, disk, and cloud."""
         self.get_design_plans(project_id)

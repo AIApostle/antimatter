@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getApiBase } from '../lib/apiConfig';
 
 interface ProjectSummary {
   project_id: string;
@@ -22,12 +23,6 @@ interface ProjectsPageProps {
   onOpenCreateModal?: () => void;
 }
 
-const getApiBase = () => {
-  if (typeof window !== 'undefined' && window.location.hostname) {
-    return `http://${window.location.hostname}:8000/api`;
-  }
-  return 'http://localhost:8000/api';
-};
 
 export const ProjectsPage: React.FC<ProjectsPageProps> = ({ onSelectProject, onOpenStudio, onOpenCreateModal }) => {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);

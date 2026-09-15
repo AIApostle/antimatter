@@ -6,6 +6,8 @@
  * Connects directly to the backend over WebSocket.
  */
 
+import { getWsBase } from '../lib/apiConfig';
+
 export interface McpToolDefinition {
   name: string;
   description: string;
@@ -67,8 +69,7 @@ export class KiCanvasMcpServer {
     if (wsUrl) {
       this.wsUrl = wsUrl;
     } else {
-      const host = typeof window !== 'undefined' ? (window.location.hostname || 'localhost') : 'localhost';
-      this.wsUrl = `ws://${host}:8000/api/mcp/kicanvas/ws`;
+      this.wsUrl = `${getWsBase()}/mcp/kicanvas/ws`;
     }
   }
 

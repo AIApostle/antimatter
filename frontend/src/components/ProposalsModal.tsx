@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { getApiBase } from '../lib/apiConfig';
 
 interface ProposalItem {
   id: string;
@@ -21,13 +22,6 @@ interface ProposalsModalProps {
   onRejectPlan?: (id: string) => void;
 }
 
-const getApiBase = () => {
-  if (typeof window !== 'undefined') {
-    const host = window.location.hostname || 'localhost';
-    return `http://${host}:8000/api`;
-  }
-  return 'http://localhost:8000/api';
-};
 
 export const ProposalsModal: React.FC<ProposalsModalProps> = ({
   projectId,

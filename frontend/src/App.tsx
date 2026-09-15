@@ -10,14 +10,9 @@ import { ProjectsPage } from './pages/ProjectsPage';
 import { ConnectorsPage } from './pages/ConnectorsPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { CreateProjectModal } from './components/CreateProjectModal';
+import { getApiBase, getWsBase } from './lib/apiConfig';
+import { AntimatterLogo } from './components/AntimatterLogo';
 
-const getApiBase = () => {
-  if (typeof window !== 'undefined') {
-    const host = window.location.hostname || 'localhost';
-    return `http://${host}:8000/api`;
-  }
-  return 'http://localhost:8000/api';
-};
 const API_BASE = getApiBase();
 
 type TopView = 'landing' | 'auth' | 'app';
@@ -66,29 +61,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         flexShrink: 0,
       }}
     >
-      <div
-        style={{
-          width: '22px',
-          height: '22px',
-          borderRadius: '6px',
-          background: 'linear-gradient(135deg, rgba(0,229,255,0.2) 0%, rgba(59,130,246,0.2) 100%)',
-          border: '1px solid rgba(0,229,255,0.45)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#00e5ff',
-          fontSize: '16px',
-          fontWeight: 900,
-          fontFamily: 'monospace',
-          lineHeight: 1,
-          boxShadow: '0 0 12px rgba(0,229,255,0.35)',
-          flexShrink: 0,
-          transform: 'translateY(1px)',
-        }}
-      >
-        ^
-      </div>
-      <span style={{ fontSize: '15px', fontWeight: 900, letterSpacing: '-0.3px', color: '#f8fafc' }}>antimatter</span>
+      <AntimatterLogo size={22} fontSize={15} />
     </div>
 
     {/* + New Chat button (ChatGPT UI) */}
@@ -435,10 +408,32 @@ const AntimatterAppContent: React.FC = () => {
   const [selectedModel, setSelectedModel]   = useState<string>(() => localStorage.getItem('antimatter_selected_model') || 'openrouter/auto');
   const [isStreaming, setIsStreaming]        = useState<boolean>(false);
   const [currentThought, setCurrentThought] = useState<string>('');
+  const [isApprovingEco, setIsApprovingEco] = useState<boolean>(false);
 
   const handleSelectModel = (modelId: string) => {
     setSelectedModel(modelId);
     localStorage.setItem('antimatter_selected_model', modelId);
+  };
+
+  const handleStopAgent = () => {
+    if (activeWsRef.current && activeWsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        activeWsRef.current.send(JSON.stringify({ action: 'stop' }));
+        activeWsRef.current.close();
+      } catch { /* ignore */ }
+    }
+    activeWsRef.current = null;
+    setIsStreaming(false);
+    setCurrentThought('');
+    setMessages((p) => [
+      ...p,
+      {
+        id: `stop-${Date.now()}`,
+        role: 'assistant',
+        content: '🛑 **Agent Stopped**: Session disconnected by engineer.',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      },
+    ]);
   };
 
   // HITL & settings
@@ -570,14 +565,11 @@ const AntimatterAppContent: React.FC = () => {
         setMessages([]);
         setAppPage('workspace');
 
-        // Automatically start planning as multi-turn question to understand what they are building
-        const kickoffPrompt = config.initialPrompt?.trim()
-          ? config.initialPrompt.trim()
-          : 'I have created a new hardware project. Please analyze the board constraints, give the project a descriptive engineering name, and start planning by asking the first architectural question via popup to understand what we are building.';
-
-        setTimeout(() => {
-          handleSendMessage(kickoffPrompt, undefined, selectedModel, approvalMode, projId);
-        }, 120);
+        if (config.initialPrompt?.trim()) {
+          setTimeout(() => {
+            handleSendMessage(config.initialPrompt!.trim(), undefined, selectedModel, approvalMode, projId);
+          }, 120);
+        }
       }
     } catch (err) {
       console.error('Failed to create project:', err);
@@ -643,10 +635,16 @@ const AntimatterAppContent: React.FC = () => {
       } else if (ev.type === 'human_decision_required') {
         setHumanDecision(ev);
       } else if (ev.type === 'thought') {
-        setCurrentThought(ev.content);
-        thoughts.push(ev.content);
+        const text = String(ev.content || '').trim();
+        if (text && text !== '"?' && text !== '?' && text !== '"') {
+          setCurrentThought(text);
+          thoughts.push(text);
+        }
+      } else if (ev.type === 'content_delta') {
+        setCurrentThought('');
       } else if (ev.type === 'tool_call') {
         toolCalls.push({ tool: ev.tool, input: ev.input });
+        setCurrentThought(`Executing tool: ${ev.tool}...`);
       } else if (ev.type === 'eco_proposal') {
         const ecoProjectId = ev.project_id || ev.eco?.project_id;
         if (!ecoProjectId || ecoProjectId === activeId) {
@@ -670,6 +668,7 @@ const AntimatterAppContent: React.FC = () => {
             }
           : ev.state);
       } else if (ev.type === 'final_message') {
+        setCurrentThought('');
         setHumanDecision(null);
         setMessages((p) => [...p, {
           id: assistantMsgId,
@@ -685,8 +684,7 @@ const AntimatterAppContent: React.FC = () => {
     // 1. Attempt WebSocket streaming connection
     let wsSuccess = false;
     try {
-      const host = window.location.hostname || 'localhost';
-      const ws = new WebSocket(`ws://${host}:8000/api/ws/chat`);
+      const ws = new WebSocket(`${getWsBase()}/ws/chat`);
 
       const wsPromise = new Promise<void>((resolve, reject) => {
         ws.onopen = () => {
@@ -810,6 +808,7 @@ const AntimatterAppContent: React.FC = () => {
 
   const handleApproveEco = async (ecoId: string) => {
     const projId = circuitState?.project_id || currentProjectId;
+    setIsApprovingEco(true);
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
@@ -834,8 +833,20 @@ const AntimatterAppContent: React.FC = () => {
           pending_eco: d.state?.pending_eco || (p.pending_eco ? { ...p.pending_eco, status: 'approved' } : null),
         } : d.state);
         setMessages((p) => [...p, { id: `sys-${Date.now()}`, role: 'assistant', content: `✓ **Plan Committed**: ${d.message}`, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
+        
+        // Auto-resume agent stream without stopping or stalling
+        await handleSendMessage(
+          "The design plan is approved. Proceed to place all components on the board, route physical copper traces, run DRC/ERC verification, and generate the final BOM.",
+          undefined,
+          selectedModel,
+          'auto_approve',
+          projId
+        );
       }
-    } catch { /* ignore */ } finally { fetchProjectState(projId); }
+    } catch { /* ignore */ } finally {
+      setIsApprovingEco(false);
+      fetchProjectState(projId);
+    }
   };
 
   const handleRejectEco = async (ecoId: string) => {
@@ -913,6 +924,8 @@ const AntimatterAppContent: React.FC = () => {
             onSelectModel={handleSelectModel}
             approvalMode={approvalMode}
             onApprovalModeChange={handleApprovalModeChange}
+            isStreaming={isStreaming}
+            onStopAgent={handleStopAgent}
           />
         )}
 
@@ -947,6 +960,8 @@ const AntimatterAppContent: React.FC = () => {
             onSetMaskColor={handleSetMaskColor}
             onExportZip={handleExportZip}
             onBackToProjects={() => setAppPage('projects')}
+            onStopAgent={handleStopAgent}
+            isApproving={isApprovingEco}
           />
         )}
 

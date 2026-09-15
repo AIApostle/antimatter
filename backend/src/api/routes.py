@@ -24,6 +24,7 @@ from ..db.supabase import db_manager
 from ..connectors.connector_manager import connector_manager
 from ..knowledge.knowledge_manager import knowledge_manager
 from ..auth.dependencies import get_current_user, verify_supabase_token
+from ..agents.openrouter_catalog import get_all_openrouter_models
 
 logger = logging.getLogger("antimatter.routes")
 router = APIRouter(prefix="/api")
@@ -99,8 +100,18 @@ async def chat_websocket(websocket: WebSocket):
             raw = await websocket.receive_text()
             data = json.loads(raw)
 
-            # Check if this is a human-in-the-loop decision answer
+            # Check if this is an action command (HITL decision or Stop)
             action = data.get("action")
+            if action == "stop":
+                logger.info("⏹️  [WS Stop Requested] Halting active agent stream.")
+                if active_stream_task and not active_stream_task.done():
+                    active_stream_task.cancel()
+                await websocket.send_json({
+                    "type": "stopped",
+                    "message": "Agent execution halted by user.",
+                })
+                continue
+
             if action == "human_decision_response":
                 decision_id = data.get("decision_id", "")
                 selection = data.get("selection", "")
@@ -307,7 +318,7 @@ async def approve_eco(req: ApprovalRequest):
             state.pending_eco.status = "approved"
 
         # 2. Check Supabase design_plans
-        plans = [p for p in db_manager.get_design_plans(req.project_id) if p.get("project_id", req.project_id) == req.project_id]
+        plans = [p for p in (await db_manager.get_design_plans_async(req.project_id)) if p.get("project_id", req.project_id) == req.project_id]
         for p in plans:
             p_id = str(p.get("id"))
             p_status = p.get("status")
@@ -329,13 +340,13 @@ async def approve_eco(req: ApprovalRequest):
                         applied_count += 1
                     break
 
-        db_manager.approve_design_plans(req.project_id, req.eco_id)
+        await db_manager.approve_design_plans_async(req.project_id, req.eco_id)
         wire_standard_circuit_nets(state)
         state.run_drc()
-        state.schematic_sexpr = generate_schematic_sexpr(state)
-        state.pcb_sexpr = generate_pcb_sexpr(state)
+        state.schematic_sexpr = await asyncio.to_thread(generate_schematic_sexpr, state)
+        state.pcb_sexpr = await asyncio.to_thread(generate_pcb_sexpr, state)
         state.revision += 1
-        db_manager.save_project(req.project_id, state.model_dump())
+        await db_manager.save_project_async(req.project_id, state.model_dump())
 
         return {
             "status": "approved",
@@ -492,14 +503,7 @@ async def delete_sop(sop_id: str):
 
 @router.get("/models")
 async def list_models():
-    """List supported multimodal foundation models."""
-    return {
-        "models": [
-            {"id": "claude-3-7-sonnet", "name": "Anthropic Claude 3.7 Sonnet (Hybrid)", "provider": "Anthropic", "multimodal": True},
-            {"id": "gpt-4o", "name": "OpenAI GPT-4o", "provider": "OpenAI", "multimodal": True},
-            {"id": "gemini-2.5-pro", "name": "Google Gemini 2.5 Pro", "provider": "Google", "multimodal": True},
-            {"id": "gemini-2.5-flash", "name": "Google Gemini 2.5 Flash", "provider": "Google", "multimodal": True},
-            {"id": "deepseek-r1", "name": "DeepSeek R1 (Reasoning)", "provider": "DeepSeek", "multimodal": False},
-        ]
-    }
+    """List all 400+ OpenRouter multimodal and reasoning foundation models."""
+    models = get_all_openrouter_models()
+    return {"models": models, "count": len(models)}
 

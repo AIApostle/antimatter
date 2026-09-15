@@ -152,21 +152,67 @@ def build_lib_symbols(components: Dict[str, Component]) -> str:
     return f"  (lib_symbols\n{symbols_joined}\n  )"
 
 
+def get_schematic_pin_offset(comp: Component, p_num: str, p_idx: int) -> tuple[float, float]:
+    """Calculate the pin terminal coordinate offset relative to symbol origin."""
+    val = (comp.value or "").upper()
+    ref = comp.ref
+    
+    if ref.startswith("R"):
+        return (0.0, 3.81) if str(p_num) == "1" else (0.0, -3.81)
+    elif ref.startswith("C"):
+        return (0.0, 3.81) if str(p_num) == "1" else (0.0, -3.81)
+    elif ref.startswith("D"):
+        return (-3.81, 0.0) if str(p_num) in ("2", "A") else (3.81, 0.0)
+    elif "AMS1117" in val:
+        offsets = {"1": (0.0, -7.62), "2": (8.89, 2.54), "3": (-8.89, 2.54), "4": (8.89, -2.54)}
+        return offsets.get(str(p_num), (-8.89, 0.0))
+    elif "USB" in val:
+        offsets = {"A4": (-10.16, 5.08), "A1": (-10.16, -5.08), "A6": (10.16, 2.54), "A7": (10.16, -2.54), "A5": (10.16, 5.08)}
+        return offsets.get(str(p_num), (-10.16, 0.0))
+    elif ref.startswith("J"):
+        return (5.08, 1.27) if str(p_num) == "1" else (5.08, -1.27)
+    
+    # Generic synthesized symbols
+    pins = sorted(comp.pins.keys())
+    half = max(1, (len(pins) + 1) // 2)
+    box_height = max(7.62, (half + 1) * 2.54)
+    box_width = 8.89
+    
+    try:
+        idx = pins.index(p_num)
+    except ValueError:
+        idx = p_idx
+        
+    if idx < half:
+        py = (box_height / 2) - (idx + 1) * 2.54
+        px = -box_width - 2.54
+    else:
+        idx_r = idx - half
+        py = (box_height / 2) - (idx_r + 1) * 2.54
+        px = box_width + 2.54
+    return (px, py)
+
+
 def generate_schematic_sexpr(state: CircuitState) -> str:
-    """Generate a valid .kicad_sch S-expression from the active circuit state."""
+    """Generate a valid .kicad_sch S-expression with symbols, labels, and real wires from the active circuit state."""
     sch_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{state.project_id}.sch"))
     
     symbols_output = []
     labels_output = []
+    wires_output = []
+    junctions_output = []
     
     # Arrange schematic symbols along a legible grid
     sch_x = 50.0
     sch_y = 50.0
     col = 0
 
+    # Group pins by net for connecting multi-point nets
+    net_pin_coords: Dict[str, list[tuple[float, float]]] = {}
+
     for ref, comp in sorted(state.components.items()):
-        comp_x = sch_x + (col % 4) * 45.0
-        comp_y = sch_y + (col // 4) * 45.0
+        comp_x = sch_x + (col % 4) * 55.0
+        comp_y = sch_y + (col // 4) * 55.0
         col += 1
 
         lib_id = comp.symbol if comp.symbol else f"Device:{comp.ref[0]}"
@@ -189,17 +235,43 @@ def generate_schematic_sexpr(state: CircuitState) -> str:
     (property "Footprint" "{comp.footprint}" (at {comp_x:.2f} {comp_y:.2f} 0) (effects (font (size 1.27 1.27)) hide))
   )""")
 
-        # Place net labels around connected pins
+        # Place net labels around connected pins with real connecting wires
         for p_idx, (p_num, pin) in enumerate(sorted(comp.pins.items())):
             if pin.net:
-                lbl_x = comp_x + (5.0 if p_idx % 2 == 0 else -5.0)
-                lbl_y = comp_y + (p_idx * 2.54) - 2.54
+                pin_ox, pin_oy = get_schematic_pin_offset(comp, p_num, p_idx)
+                pin_term_x = comp_x + pin_ox
+                pin_term_y = comp_y + pin_oy
+                
+                # Wire extending outwards towards the net label
+                wire_len = 5.08 if pin_ox >= 0 else -5.08
+                lbl_x = pin_term_x + wire_len
+                lbl_y = pin_term_y
+                
+                # Wire from pin terminal to label
+                wires_output.append(
+                    f'  (wire (pts (xy {pin_term_x:.2f} {pin_term_y:.2f}) (xy {lbl_x:.2f} {lbl_y:.2f})) (stroke (width 0) (type default)) (uuid "{uuid.uuid4()}"))'
+                )
+                
+                # Label at the end of the wire
                 labels_output.append(
                     f'  (label "{pin.net}" (at {lbl_x:.2f} {lbl_y:.2f} 0) (fields_autoplaced) (effects (font (size 1.0 1.0))))'
                 )
 
+                if pin.net not in net_pin_coords:
+                    net_pin_coords[pin.net] = []
+                net_pin_coords[pin.net].append((lbl_x, lbl_y))
+
+    # Add junction markers for multi-point connections
+    for net_name, pts in net_pin_coords.items():
+        if len(pts) >= 2:
+            junctions_output.append(
+                f'  (junction (at {pts[0][0]:.2f} {pts[0][1]:.2f}) (diameter 1.0) (color 0 0 0 0) (uuid "{uuid.uuid4()}"))'
+            )
+
     symbols_section = "\n".join(symbols_output)
     labels_section = "\n".join(labels_output)
+    wires_section = "\n".join(wires_output)
+    junctions_section = "\n".join(junctions_output)
     lib_symbols_section = build_lib_symbols(state.components)
 
     return f"""(kicad_sch (version 20230121) (generator "antimotion")
@@ -213,6 +285,8 @@ def generate_schematic_sexpr(state: CircuitState) -> str:
   )
 {lib_symbols_section}
 {symbols_section}
+{wires_section}
+{junctions_section}
 {labels_section}
   (sheet_instances
     (path "/" (page "1"))
@@ -222,7 +296,7 @@ def generate_schematic_sexpr(state: CircuitState) -> str:
 
 
 def generate_pcb_sexpr(state: CircuitState) -> str:
-    """Generate a valid .kicad_pcb S-expression from the active circuit state."""
+    """Generate a valid .kicad_pcb S-expression from the active circuit state with real copper tracks."""
     pcb_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{state.project_id}.pcb"))
 
     # 1. Build net mappings (net 0 is always "")
@@ -235,14 +309,15 @@ def generate_pcb_sexpr(state: CircuitState) -> str:
             net_defs.append(f'  (net {idx} "{net_name}")')
             idx += 1
 
-    # 2. Board outline in Edge.Cuts
+    # 2. Board outline in Edge.Cuts tightly framed
     bw = state.board.width
     bh = state.board.height
-    r = state.board.corner_radius
     outline_sexpr = f"""  (gr_rect (start 0 0) (end {bw:.2f} {bh:.2f}) (stroke (width 0.15) (type default)) (fill none) (layer "Edge.Cuts") (uuid "{uuid.uuid4()}"))"""
 
     # 3. Footprints
     footprints_output = []
+    pad_positions_by_net: Dict[str, list[tuple[float, float]]] = {}
+
     for ref, comp in sorted(state.components.items()):
         fx = comp.x
         fy = comp.y
@@ -259,6 +334,10 @@ def generate_pcb_sexpr(state: CircuitState) -> str:
             pads_sexpr.append(
                 f'    (pad "{p_num}" smd rect (at {px:.2f} {py:.2f} 0) (size 1.2 1.5) (layers "F.Cu" "F.Paste" "F.Mask") {net_clause})'
             )
+            if net_name:
+                if net_name not in pad_positions_by_net:
+                    pad_positions_by_net[net_name] = []
+                pad_positions_by_net[net_name].append((fx + px, fy + py))
 
         pads_body = "\n".join(pads_sexpr)
         footprints_output.append(f"""  (footprint "{comp.footprint}" (layer "{comp.layer}")
@@ -269,13 +348,33 @@ def generate_pcb_sexpr(state: CircuitState) -> str:
 {pads_body}
   )""")
 
-    # 4. Routed tracks
+    # 4. Routed tracks: from explicit tracks, and synthesized Manhattan traces for connected nets
     tracks_output = []
     for track in state.tracks:
         net_num = net_indices.get(track.net_name, 0)
         tracks_output.append(
             f'  (segment (start {track.start[0]:.2f} {track.start[1]:.2f}) (end {track.end[0]:.2f} {track.end[1]:.2f}) (width {track.width:.2f}) (layer "{track.layer}") (net {net_num}) (uuid "{track.uuid}"))'
         )
+
+    # Synthesize physical copper tracks for nets that do not already have tracks
+    routed_nets = {t.net_name for t in state.tracks}
+    for net_name, pads in pad_positions_by_net.items():
+        if net_name not in routed_nets and len(pads) >= 2:
+            net_num = net_indices.get(net_name, 0)
+            # Route chained Manhattan copper traces between pads
+            for i in range(len(pads) - 1):
+                p1 = pads[i]
+                p2 = pads[i + 1]
+                mid_x = p2[0]
+                mid_y = p1[1]
+                # Horizontal segment
+                tracks_output.append(
+                    f'  (segment (start {p1[0]:.2f} {p1[1]:.2f}) (end {mid_x:.2f} {mid_y:.2f}) (width 0.25) (layer "F.Cu") (net {net_num}) (uuid "{uuid.uuid4()}"))'
+                )
+                # Vertical segment
+                tracks_output.append(
+                    f'  (segment (start {mid_x:.2f} {mid_y:.2f}) (end {p2[0]:.2f} {p2[1]:.2f}) (width 0.25) (layer "F.Cu") (net {net_num}) (uuid "{uuid.uuid4()}"))'
+                )
 
     # 5. Vias
     vias_output = []
@@ -290,11 +389,14 @@ def generate_pcb_sexpr(state: CircuitState) -> str:
     tracks_block = "\n".join(tracks_output)
     vias_block = "\n".join(vias_output)
 
+    paper_w = max(bw + 10.0, 70.0)
+    paper_h = max(bh + 10.0, 50.0)
+
     return f"""(kicad_pcb (version 20221018) (generator "antimotion")
   (general
     (thickness {state.board.thickness})
   )
-  (paper "A4")
+  (paper "User" {paper_w:.2f} {paper_h:.2f})
   (layers
     (0 "F.Cu" signal)
     (31 "B.Cu" signal)

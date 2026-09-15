@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { ChatMessage, AIModel, ECOProposal } from '../types/eda';
 import { HumanApprovalModal } from './HumanApprovalModal';
+import { StopAgentModal } from './StopAgentModal';
 
 interface ChatConsoleProps {
   messages: ChatMessage[];
@@ -18,6 +19,8 @@ interface ChatConsoleProps {
   onToggleHitlMode: () => void;
   onOpenSettings: () => void;
   permissionRequest: { tool: string; input: any; prompt: string } | null;
+  onStopAgent?: () => void;
+  isApproving?: boolean;
 }
 
 const QUICK_PROMPTS = [
@@ -44,9 +47,12 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
   onToggleHitlMode,
   onOpenSettings,
   permissionRequest,
+  onStopAgent,
+  isApproving = false,
 }) => {
   const [inputText, setInputText] = useState<string>('');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [showStopModal, setShowStopModal] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -361,6 +367,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
             onApprove={onApproveEco}
             onReject={onRejectEco}
             onModify={onModifyEco}
+            isProcessing={isApproving}
           />
         )}
       </div>
@@ -465,17 +472,52 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
               </button>
             </div>
 
-            <button
-              type="submit"
-              disabled={isStreaming || (!inputText.trim() && !imagePreview)}
-              className="btn btn-primary"
-              style={{ fontSize: '12px', padding: '6px 16px' }}
-            >
-              {isStreaming ? 'Synthesizing...' : 'Generate PCB'}
-            </button>
+            {isStreaming ? (
+              <button
+                type="button"
+                onClick={() => setShowStopModal(true)}
+                className="btn font-mono"
+                style={{
+                  fontSize: '12px',
+                  padding: '6px 16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  background: 'rgba(239, 68, 68, 0.18)',
+                  border: '1px solid #ef4444',
+                  color: '#fca5a5',
+                  borderRadius: '6px',
+                  boxShadow: '0 0 12px rgba(239, 68, 68, 0.25)',
+                  cursor: 'pointer',
+                }}
+              >
+                <span style={{ fontSize: '10px' }}>■</span>
+                <span>Stop Agent</span>
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!inputText.trim() && !imagePreview}
+                className="btn btn-primary"
+                style={{ fontSize: '12px', padding: '6px 16px' }}
+              >
+                Generate PCB
+              </button>
+            )}
           </div>
         </form>
       </div>
+
+      {showStopModal && (
+        <StopAgentModal
+          isOpen={showStopModal}
+          onCancel={() => setShowStopModal(false)}
+          onConfirmStop={() => {
+            setShowStopModal(false);
+            onStopAgent?.();
+          }}
+        />
+      )}
     </div>
   );
 };

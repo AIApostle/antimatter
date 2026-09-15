@@ -6,6 +6,7 @@ import { BOMAndNetlist } from '../components/BOMAndNetlist';
 import { HumanDecisionModal } from '../components/HumanDecisionModal';
 import { ProposalsModal } from '../components/ProposalsModal';
 import { Composer } from './HomePage';
+import { getApiBase } from '../lib/apiConfig';
 
 export type ProjectTab = 'ai' | 'schematics' | 'layout' | 'plans' | 'bom' | '3d';
 
@@ -169,7 +170,8 @@ const EcoCard: React.FC<{
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
   onModify: (id: string, feedback: string) => void;
-}> = ({ eco, onApprove, onReject, onModify }) => {
+  isProcessing?: boolean;
+}> = ({ eco, onApprove, onReject, onModify, isProcessing = false }) => {
   const [feedback, setFeedback] = useState('');
   const [showModify, setShowModify] = useState(false);
   const isApproved = eco.status === 'approved';
@@ -260,6 +262,7 @@ const EcoCard: React.FC<{
         <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
           <button
             onClick={() => onApprove(eco.id)}
+            disabled={isProcessing}
             style={{
               padding: '6px 14px',
               borderRadius: '7px',
@@ -268,13 +271,15 @@ const EcoCard: React.FC<{
               color: '#050b14',
               fontSize: '12px',
               fontWeight: 700,
-              cursor: 'pointer',
+              cursor: isProcessing ? 'not-allowed' : 'pointer',
+              opacity: isProcessing ? 0.7 : 1,
             }}
           >
-            ✓ Approve ECO
+            {isProcessing ? 'Applying & Resuming...' : '✓ Approve ECO'}
           </button>
           <button
             onClick={() => setShowModify(true)}
+            disabled={isProcessing}
             style={{
               padding: '6px 12px',
               borderRadius: '7px',
@@ -320,13 +325,6 @@ interface ProposalItem {
   created_at: string;
 }
 
-const getApiBase = () => {
-  if (typeof window !== 'undefined') {
-    const host = window.location.hostname || 'localhost';
-    return `http://${host}:8000/api`;
-  }
-  return 'http://localhost:8000/api';
-};
 
 const PlansPageView: React.FC<{
   projectId: string;
@@ -604,6 +602,8 @@ interface WorkspacePageProps {
   onSetMaskColor: (color: string) => void;
   onExportZip: () => void;
   onBackToProjects: () => void;
+  onStopAgent?: () => void;
+  isApproving?: boolean;
 }
 
 // ── WorkspacePage Component ───────────────────────────────────────────────
@@ -626,8 +626,11 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = ({
   humanDecision,
   onConfirmDecision,
   onDismissDecision,
+  onSetMaskColor: _onSetMaskColor,
   onExportZip,
   onBackToProjects: _onBackToProjects,
+  onStopAgent,
+  isApproving = false,
 }) => {
   const activeProjectId = projectId || circuitState?.project_id || '';
   const isProjectEco = pendingEco && (!pendingEco.project_id || pendingEco.project_id === activeProjectId);
@@ -962,6 +965,7 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = ({
                       onApprove={onApproveEco}
                       onReject={onRejectEco}
                       onModify={onModifyEco}
+                      isProcessing={isApproving}
                     />
                   )}
 
@@ -1031,6 +1035,7 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = ({
                   <Composer
                     onSubmit={(prompt, img, model, mode) => onSendMessage(prompt, img, model, mode || approvalMode)}
                     isStreaming={isStreaming}
+                    onStopAgent={onStopAgent}
                     selectedModel={selectedModel}
                     onSelectModel={onSelectModel}
                     approvalMode={approvalMode}

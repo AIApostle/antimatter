@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getApiBase } from '../lib/apiConfig';
 
 interface ComponentData {
   id: string;
@@ -46,12 +47,6 @@ interface KnowledgePageProps {
   onCopyPromptToStudio?: (prompt: string) => void;
 }
 
-const getApiBase = () => {
-  if (typeof window !== 'undefined' && window.location.hostname) {
-    return `http://${window.location.hostname}:8000/api`;
-  }
-  return 'http://localhost:8000/api';
-};
 
 export const KnowledgePage: React.FC<KnowledgePageProps> = ({ onCopyPromptToStudio }) => {
   const [standards, setStandards] = useState<OpenSourceStandard[]>([]);

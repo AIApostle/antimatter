@@ -6,6 +6,7 @@ Starts FastAPI server with CORS, mounts routes, and initializes EDA engine.
 from dotenv import load_dotenv
 load_dotenv()
 
+import os
 import logging
 logging.basicConfig(
     level=logging.INFO,
@@ -25,10 +26,25 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS configuration for local React Vite studio
+# CORS configuration supporting localhost and production Render URL
+allowed_origins = [
+    "https://antimatter-3p10.onrender.com",
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:8000",
+]
+
+env_origins = os.getenv("CORS_ORIGINS")
+if env_origins:
+    allowed_origins.extend([o.strip() for o in env_origins.split(",") if o.strip()])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?|https://.*\.onrender\.com",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
