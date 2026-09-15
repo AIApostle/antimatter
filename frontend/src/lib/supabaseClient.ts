@@ -1,8 +1,9 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Read from Vite environment or localStorage for runtime developer overrides
+// Read from Vite environment or localStorage for runtime developer overrides.
+// Vercel only exposes variables prefixed with VITE_ to the browser bundle.
 const envUrl = import.meta.env.VITE_SUPABASE_URL;
-const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 const localUrl = typeof window !== 'undefined' ? localStorage.getItem('antimatter_supabase_url') : null;
 const localKey = typeof window !== 'undefined' ? localStorage.getItem('antimatter_supabase_key') : null;
