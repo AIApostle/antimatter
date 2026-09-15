@@ -13,6 +13,11 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
+for name in ("httpx", "httpcore", "postgrest", "supabase"):
+    _l = logging.getLogger(name)
+    _l.setLevel(logging.WARNING)
+    _l.propagate = False
+
 logger = logging.getLogger("antimatter")
 logger.info("🚀 Antimatter EDA Platform Backend Initializing...")
 

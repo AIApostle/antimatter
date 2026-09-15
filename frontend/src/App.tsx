@@ -705,7 +705,8 @@ const AntimatterAppContent: React.FC = () => {
           try {
             const ev = JSON.parse(event.data);
             handleStreamEvent(ev);
-            if (ev.type === 'final_message') {
+            if (ev.type === 'final_message' || ev.type === 'error' || ev.type === 'stopped') {
+              setIsStreaming(false);
               ws.close();
               resolve();
             }
@@ -713,11 +714,15 @@ const AntimatterAppContent: React.FC = () => {
         };
 
         ws.onerror = (err) => {
+          activeWsRef.current = null;
+          setIsStreaming(false);
           if (!wsSuccess) reject(err);
+          else resolve();
         };
 
         ws.onclose = () => {
           activeWsRef.current = null;
+          setIsStreaming(false);
           resolve();
         };
       });

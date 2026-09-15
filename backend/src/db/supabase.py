@@ -27,6 +27,10 @@ except ImportError:
     SUPABASE_INSTALLED = False
     Client = Any
 
+for name in ("httpx", "httpcore", "postgrest", "supabase"):
+    _l = logging.getLogger(name)
+    _l.setLevel(logging.WARNING)
+    _l.propagate = False
 logger = logging.getLogger(__name__)
 
 
@@ -39,14 +43,19 @@ class SupabaseConfig(BaseSettings):
 
 
 import concurrent.futures
+import threading
+import time
 
 class DatabaseManager:
-    """Manages cloud persistence with local non-blocking in-memory cache."""
+    """Manages cloud persistence with local non-blocking in-memory cache and debounced background sync."""
 
     def __init__(self):
         self.config = SupabaseConfig()
         self.client: Optional[Client] = None
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="db_sync")
+        self._pending_upserts: Dict[str, Any] = {}
+        self._scheduled_projects: set = set()
+        self._upsert_lock = threading.Lock()
         self._init_client()
         # Local in-memory / cache fallback
         self._local_projects: Dict[str, Dict[str, Any]] = {}
@@ -68,13 +77,26 @@ class DatabaseManager:
     def is_connected(self) -> bool:
         return self.client is not None
 
-    def _bg_upsert_project(self, payload: Dict[str, Any]):
-        if not self.client:
+    def _debounced_flush_project(self, project_id: str):
+        time.sleep(0.2)
+        with self._upsert_lock:
+            entry = self._pending_upserts.pop(project_id, None)
+            self._scheduled_projects.discard(project_id)
+        if not entry:
             return
+        payload, updated_data = entry
         try:
-            self.client.table("projects").upsert(payload).execute()
+            disk_projects = self._load_disk_projects()
+            disk_projects[project_id] = updated_data
+            self._save_disk_projects(disk_projects)
         except Exception as e:
-            logger.debug("[Database] Background upsert project failed: %s", e)
+            logger.debug("[Database] Disk cache write failed: %s", e)
+
+        if self.client:
+            try:
+                self.client.table("projects").upsert(payload).execute()
+            except Exception as e:
+                logger.debug("[Database] Supabase debounced upsert failed: %s", e)
 
     def _bg_insert_plan(self, payload: Dict[str, Any]):
         if not self.client:
@@ -141,7 +163,7 @@ class DatabaseManager:
             logger.debug("[Database] Failed saving disk plans: %s", e)
 
     def save_project(self, project_id: str, data: Dict[str, Any], user_id: Optional[str] = None) -> bool:
-        """Persist circuit state and KiCad S-expressions instantly without blocking."""
+        """Persist circuit state and KiCad S-expressions instantly with zero latency."""
         updated_data = {
             **data,
             "project_id": project_id,
@@ -149,30 +171,26 @@ class DatabaseManager:
         }
         self._local_projects[project_id] = updated_data
 
-        # Persist to disk cache
-        try:
-            disk_projects = self._load_disk_projects()
-            disk_projects[project_id] = updated_data
-            self._save_disk_projects(disk_projects)
-        except Exception as e:
-            logger.debug("[Database] Disk cache write failed: %s", e)
+        payload: Dict[str, Any] = {
+            "id": project_id,
+            "name": data.get("project_name", project_id),
+            "revision": data.get("revision", 1),
+            "board_config": data.get("board", {}),
+            "components": data.get("components", {}),
+            "nets": data.get("nets", {}),
+            "schematic_sexpr": data.get("schematic_sexpr", ""),
+            "pcb_sexpr": data.get("pcb_sexpr", ""),
+            "updated_at": updated_data["updated_at"],
+        }
+        uid = user_id or data.get("user_id")
+        if uid:
+            payload["user_id"] = uid
 
-        if self.client:
-            payload: Dict[str, Any] = {
-                "id": project_id,
-                "name": data.get("project_name", project_id),
-                "revision": data.get("revision", 1),
-                "board_config": data.get("board", {}),
-                "components": data.get("components", {}),
-                "nets": data.get("nets", {}),
-                "schematic_sexpr": data.get("schematic_sexpr", ""),
-                "pcb_sexpr": data.get("pcb_sexpr", ""),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-            uid = user_id or data.get("user_id")
-            if uid:
-                payload["user_id"] = uid
-            self._executor.submit(self._bg_upsert_project, payload)
+        with self._upsert_lock:
+            self._pending_upserts[project_id] = (payload, updated_data)
+            if project_id not in self._scheduled_projects:
+                self._scheduled_projects.add(project_id)
+                self._executor.submit(self._debounced_flush_project, project_id)
         return True
 
     def list_projects(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]:

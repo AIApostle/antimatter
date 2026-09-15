@@ -501,7 +501,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
                 className="btn btn-primary"
                 style={{ fontSize: '12px', padding: '6px 16px' }}
               >
-                Generate PCB
+                ⚡ Engineer It
               </button>
             )}
           </div>

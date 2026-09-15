@@ -197,9 +197,28 @@ At the very beginning of any hardware design task, you MUST state an explicit Go
 
 You must actively update and check off each TODO as you achieve it.
 CRITICAL MANDATES:
-1. ALWAYS ROUTE COPPER TRACES: It is strictly forbidden to only define nets without routing copper traces. You MUST call `route_track` for ground planes, power rails (+3V3, +5V, VBUS), and critical signal tracks (I2C, SPI, UART, CC lines).
-2. ALWAYS PERFORM DRC AND ERC: You MUST call `run_drc` before concluding your work. If any DRC or ERC errors are detected, fix them and re-run `run_drc` until verified clean.
-3. NEVER GET STUCK IN A LOOP: Execute each phase with purpose. Do not call the same tool with identical arguments repeatedly. After research, immediately propose the plan; after placement, immediately wire and route traces; after wiring, run DRC/ERC and deliver the final report with the Bill of Materials (BOM).
+1. ALWAYS USE THE POPUP QUESTION MODAL FOR ALL QUESTIONS & PERMISSIONS:
+Whenever you need to ask the human engineer a question, clarify ambiguous requirements, ask for user preference (e.g. MCU family, battery vs USB power, bus accuracy, pinout selection), or ask for permission before modifying/overwriting files or executing sensitive actions:
+YOU ARE STRICTLY FORBIDDEN FROM ASKING IN CHAT TEXT OR MARKDOWN PROSE!
+You MUST ALWAYS invoke the `request_human_decision` tool with your question, concrete options, and your recommendation.
+This immediately renders an interactive popup modal for the engineer.
+Never write questions out in chat text without calling `request_human_decision`.
+
+2. ALWAYS CALL TOOLS DIRECTLY - DO NOT WRITE MONOLOGUES OR IDLE THOUGHTS:
+You are an autonomous hardware engineering execution engine, NOT a conversational chatbot. Do NOT write long paragraphs explaining what you could do or theorizing about circuits. You must execute each step by immediately calling the appropriate tools:
+- `rename_project` to establish a clean engineering title.
+- `request_human_decision` for ANY questions, choices, or permissions (via popup modal).
+- `lookup_component` or `search_web_for_components` to verify parts and pinouts.
+- `propose_design_plan` to formulate the ECO.
+- `get_board_state` and `add_component` to place components.
+- `connect_pin_to_net` to wire nets.
+- `route_track` to route copper traces.
+- `run_drc` to execute DRC/ERC verification.
+The ONLY raw markdown text you should output is the final comprehensive Engineering Report & BOM, or KiCad S-expressions when updating CAD files!
+
+3. ALWAYS ROUTE COPPER TRACES: It is strictly forbidden to only define nets without routing copper traces. You MUST call `route_track` for ground planes, power rails (+3V3, +5V, VBUS), and critical signal tracks (I2C, SPI, UART, CC lines).
+4. ALWAYS PERFORM DRC AND ERC: You MUST call `run_drc` before concluding your work. If any DRC or ERC errors are detected, fix them and re-run `run_drc` until verified clean.
+5. NEVER GET STUCK IN A LOOP: Execute each phase with purpose. Do not call the same tool with identical arguments repeatedly. After research, immediately propose the plan; after placement, immediately wire and route traces; after wiring, run DRC/ERC and deliver the final report with the Bill of Materials (BOM).
 
 ================================================================================
 ANTIMATTER MULTI-TURN ENGINEERING LIFECYCLE (MANDATORY CONTINUOUS PROTOCOL)
@@ -264,8 +283,12 @@ FINAL TURN: MANDATORY COMPREHENSIVE ENGINEERING REPORT & BOM
 INTENT & CASUAL CONVERSATION HANDLING
 ================================================================================
 If the user input is a greeting, salutation, question about your capabilities, or casual message (e.g. 'hi', 'hello', 'hey', 'h', 'who are you', 'help'):
-- DO NOT call any design tools (do not rename the project, do not call propose_design_plan, do not call request_human_decision, do not add components).
+- DO NOT call any design tools (do not rename the project, do not call propose_design_plan, do not add components).
 - Respond conversationally: introduce yourself as Antimatter (the AI Hardware Systems Architect), summarize your capabilities, and invite the engineer to describe the circuit or board they wish to build.
+
+If the user asks for a list of designs to choose from (e.g. "give me a list of designs you can do, let me choose"):
+- Provide an inspiring, well-structured catalog of designs you can formulate (e.g. ESP32-C3 Environmental Telemetry Node, USB-C 5V to 3.3V LDO Power Delivery, RP2040 Dual-Core Carrier Board, LiPo Battery Charger with Protection, Buck Converter 12V-to-5V).
+- If the engineer wants to choose, you can invoke `request_human_decision` with these designs as selectable options so they can easily pick their preferred board from the interactive popup modal!
 ================================================================================
 
 COMPONENT TAXONOMY & REFERENCE DESIGNATORS:
@@ -632,7 +655,7 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], project_id: str) ->
         new_name = args.get("new_name", "").strip()
         if new_name:
             state.project_name = new_name
-            db_manager.save_project(project_id, state.model_dump())
+            await db_manager.save_project_async(project_id, state.model_dump())
             return {"status": "success", "message": f"Project renamed to '{new_name}'", "project_name": state.project_name}
         return {"status": "error", "message": "No new name provided"}
 
@@ -767,7 +790,7 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], project_id: str) ->
         )
         wire_standard_circuit_nets(state)
         asyncio.create_task(kicanvas_bridge.call_frontend_tool("kicanvas_select", {"ref": ref}))
-        db_manager.save_project(project_id, state.model_dump())
+        await db_manager.save_project_async(project_id, state.model_dump())
         return {"status": "success", "message": f"Added {ref} ({value}) at ({cx}, {cy}) with nets configured", "component": comp.model_dump()}
 
     elif tool_name == "connect_pin_to_net":
@@ -780,7 +803,7 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], project_id: str) ->
                 n = str(item.get("net_name", "")).strip()
                 if r and p and n and state.connect_pin(r, p, n):
                     connected_count += 1
-            db_manager.save_project(project_id, state.model_dump())
+            await db_manager.save_project_async(project_id, state.model_dump())
             return {"status": "success", "message": f"Batch connected {connected_count} pins across {len(conns)} requests", "connected_count": connected_count}
 
         ref = args.get("ref", "")
@@ -789,7 +812,7 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], project_id: str) ->
         success = state.connect_pin(ref, pin, net_name)
         if success:
             asyncio.create_task(kicanvas_bridge.call_frontend_tool("kicanvas_highlight_net", {"net_name": net_name}))
-            db_manager.save_project(project_id, state.model_dump())
+            await db_manager.save_project_async(project_id, state.model_dump())
             return {"status": "success", "message": f"Connected {ref}.{pin} to {net_name}"}
         return {"status": "error", "message": f"Component {ref} not found"}
 
@@ -801,7 +824,7 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], project_id: str) ->
             layer=args.get("layer", "F.Cu"),
             net_name=args.get("net_name", ""),
         )
-        db_manager.save_project(project_id, state.model_dump())
+        await db_manager.save_project_async(project_id, state.model_dump())
         return {"status": "success", "message": f"Routed {seg.layer} track for {seg.net_name}"}
 
     elif tool_name == "configure_board":
@@ -811,13 +834,13 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], project_id: str) ->
         state.board.mask_color = args.get("mask_color", "black")
         state.board.finish = args.get("finish", "ENIG")
         state.revision += 1
-        db_manager.save_project(project_id, state.model_dump())
+        await db_manager.save_project_async(project_id, state.model_dump())
         return {"status": "success", "message": f"Configured board {state.board.width}x{state.board.height}mm"}
 
     elif tool_name == "run_drc":
         wire_standard_circuit_nets(state)
         errors = state.run_drc()
-        db_manager.save_project(project_id, state.model_dump())
+        await db_manager.save_project_async(project_id, state.model_dump())
         pass_status = len(errors) == 0
         summary_msg = "ERC & DRC passed with 0 errors! All component pins and nets verified." if pass_status else f"ERC/DRC complete: {len(errors)} issue(s) detected. Please resolve floating pins or clearance notes."
         return {
@@ -829,7 +852,7 @@ async def execute_tool(tool_name: str, args: Dict[str, Any], project_id: str) ->
         }
 
     elif tool_name == "save_project_to_supabase":
-        ok = db_manager.save_project(project_id, state.model_dump())
+        ok = await db_manager.save_project_async(project_id, state.model_dump())
         return {"status": "success" if ok else "failed", "project_id": project_id}
 
     elif tool_name == "request_human_decision":
@@ -1054,7 +1077,7 @@ class PCBAgent:
 
         yield {
             "type": "thought",
-            "content": f"Connected to model: {clean_model}. Analyzing circuit requirements...",
+            "content": "Analyzing circuit requirements and power architecture...",
         }
 
         client = AsyncOpenAI(
@@ -1066,16 +1089,45 @@ class PCBAgent:
             },
         )
 
+        active_model = clean_model
+        fallback_models = ["openrouter/auto", "meta-llama/llama-3.3-70b-instruct:free"]
+
         try:
             while turn < max_turns:
                 turn += 1
-                logger.info("🤖 [Agent Turn %d/%d] Requesting LLM completion from %s...", turn, max_turns, clean_model)
-                stream = await client.chat.completions.create(
-                    model=clean_model,
-                    messages=conversation_history,
-                    tools=OPENAI_TOOL_DEFINITIONS,
-                    stream=True,
-                )
+                logger.info("🤖 [Agent Turn %d/%d] Requesting LLM completion from %s...", turn, max_turns, active_model)
+
+                stream = None
+                model_candidates = [active_model]
+                for fb in fallback_models:
+                    if fb not in model_candidates:
+                        model_candidates.append(fb)
+
+                for attempt_idx, candidate in enumerate(model_candidates):
+                    try:
+                        stream = await client.chat.completions.create(
+                            model=candidate,
+                            messages=conversation_history,
+                            tools=OPENAI_TOOL_DEFINITIONS,
+                            stream=True,
+                        )
+                        if candidate != active_model:
+                            logger.info("[Model Failover] Successfully connected to %s", candidate)
+                            active_model = candidate
+                        break
+                    except Exception as model_err:
+                        err_msg = str(model_err).lower()
+                        is_conn_error = any(kw in err_msg for kw in ("connection", "timeout", "rate", "502", "503", "504", "overloaded", "temporarily", "unreachable"))
+                        if is_conn_error and attempt_idx < len(model_candidates) - 1:
+                            next_model = model_candidates[attempt_idx + 1]
+                            logger.warning("[Model Fallback Triggered] %s failed (%s). Rerouting to %s...", candidate, model_err, next_model)
+                            yield {
+                                "type": "thought",
+                                "content": f"Connection to {candidate.split('/')[-1]} was interrupted. Seamlessly routing to {next_model.split('/')[-1]}...",
+                            }
+                            await asyncio.sleep(0.5)
+                            continue
+                        raise model_err
 
                 accumulated_content = ""
                 accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
@@ -1455,7 +1507,7 @@ class PCBAgent:
                             state.revision += 1
                             state.pending_eco.status = "approved"
                             db_manager.approve_design_plans(project_id, state.pending_eco.id)
-                            db_manager.save_project(project_id, state.model_dump())
+                            await db_manager.save_project_async(project_id, state.model_dump())
                             yield {
                                 "type": "eco_proposal",
                                 "project_id": project_id,
@@ -1500,7 +1552,7 @@ class PCBAgent:
 
         except Exception as e:
             logger.error("[LLM Stream Exception]: %s", e)
-            err_text = f"⚠️ **Model Execution Error**: {str(e)}\n\nPlease ensure your OpenRouter API key is active and has access to `{clean_model}`."
+            err_text = f"⚠️ **Hardware Synthesis Interrupted**: {str(e)}\n\nPlease try again or select another model from the model selector."
             yield {
                 "type": "final_message",
                 "content": err_text,
@@ -1511,7 +1563,7 @@ class PCBAgent:
         if len(state.components) >= 1:
             wire_standard_circuit_nets(state)
             state.run_drc()
-            db_manager.save_project(project_id, state.model_dump())
+            await db_manager.save_project_async(project_id, state.model_dump())
 
         # Fallback synthesis: guarantee user always receives the breakdown and BOM
         if not final_text or ("| RefDes |" not in final_text and "| Ref |" not in final_text and "Bill of Materials" not in final_text):
@@ -1519,7 +1571,7 @@ class PCBAgent:
                 final_text = self._build_engineering_breakdown(state, prompt, final_text)
 
         # Emit final synthesized message if not emitted by error
-        if final_text and not final_text.startswith("⚠️ **Model Execution Error**"):
+        if final_text and not final_text.startswith("⚠️ **Hardware Synthesis Interrupted**"):
             yield {
                 "type": "final_message",
                 "content": final_text,
