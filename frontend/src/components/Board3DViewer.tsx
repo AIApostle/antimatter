@@ -1,17 +1,32 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
-import type { CircuitState, ComponentItem } from '../types/eda';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import type { CircuitState } from '../types/eda';
+import { getApiBase } from '../lib/apiConfig';
 
 interface Board3DViewerProps {
   state: CircuitState;
   onSelectComponent?: (ref: string) => void;
 }
 
+export const THREE_D_BG_OPTIONS = [
+  { id: 'dark', label: 'Dark', color: '#07080c' },
+  { id: 'navy', label: 'Navy', color: '#030c1b' },
+  { id: 'emerald', label: 'Green', color: '#04150d' },
+  { id: 'slate', label: 'Slate', color: '#161a24' },
+];
+
 export const Board3DViewer: React.FC<Board3DViewerProps> = ({ state }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [activePreset, setActivePreset] = useState<'iso' | 'top' | 'bottom' | 'angle'>('iso');
-  const [showTraces, setShowTraces] = useState<boolean>(true);
-  const [showComponents, setShowComponents] = useState<boolean>(true);
+  const [isLoadingGlb, setIsLoadingGlb] = useState<boolean>(true);
+  const [isUsingNativeGlb, setIsUsingNativeGlb] = useState<boolean>(false);
+
+  // Background color selection for 3D viewport
+  const [activeBgId, setActiveBgId] = useState<string>(() => {
+    return localStorage.getItem('antimatter_3d_bg') || 'dark';
+  });
+  const activeBg = THREE_D_BG_OPTIONS.find((b) => b.id === activeBgId) || THREE_D_BG_OPTIONS[0];
 
   // References for animation and camera control
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -19,12 +34,19 @@ export const Board3DViewer: React.FC<Board3DViewerProps> = ({ state }) => {
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const boardGroupRef = useRef<THREE.Group | null>(null);
 
+  // Update scene background color reactively
+  useEffect(() => {
+    if (sceneRef.current) {
+      sceneRef.current.background = new THREE.Color(activeBg.color);
+    }
+  }, [activeBg]);
+
   // Mouse interaction state
   const isDraggingRef = useRef<boolean>(false);
   const isPanningRef = useRef<boolean>(false);
   const previousMousePositionRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  // Solder mask color palette mapping
+  // Solder mask color palette mapping for fallback substrate
   const getMaskColor = (colorName: string): number => {
     switch (colorName.toLowerCase()) {
       case 'green':
@@ -41,6 +63,62 @@ export const Board3DViewer: React.FC<Board3DViewerProps> = ({ state }) => {
     }
   };
 
+  // Fallback procedural board builder if GLB compilation is pending or encounters an error
+  const buildFallbackBoard = useCallback(() => {
+    const boardGroup = boardGroupRef.current;
+    if (!boardGroup) return;
+
+    while (boardGroup.children.length > 0) {
+      boardGroup.remove(boardGroup.children[0]);
+    }
+
+    const bw = state.board.width || 50;
+    const bh = state.board.height || 35;
+    const thickness = state.board.thickness || 1.6;
+    const maskColor = getMaskColor(state.board.mask_color || 'black');
+
+    const shape = new THREE.Shape();
+    const r = Math.min(state.board.corner_radius || 2.5, bw / 4, bh / 4);
+    const hw = bw / 2;
+    const hh = bh / 2;
+
+    shape.moveTo(-hw + r, -hh);
+    shape.lineTo(hw - r, -hh);
+    shape.quadraticCurveTo(hw, -hh, hw, -hh + r);
+    shape.lineTo(hw, hh - r);
+    shape.quadraticCurveTo(hw, hh, hw - r, hh);
+    shape.lineTo(-hw + r, hh);
+    shape.quadraticCurveTo(-hw, hh, -hw, hh - r);
+    shape.lineTo(-hw, -hh + r);
+    shape.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
+
+    const extrudeSettings = {
+      depth: thickness,
+      bevelEnabled: true,
+      bevelSegments: 2,
+      steps: 1,
+      bevelSize: 0.1,
+      bevelThickness: 0.1,
+    };
+
+    const boardGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+    boardGeo.center();
+
+    const maskMat = new THREE.MeshPhysicalMaterial({
+      color: maskColor,
+      roughness: 0.35,
+      metalness: 0.05,
+      clearcoat: 0.3,
+      clearcoatRoughness: 0.15,
+    });
+
+    const boardMesh = new THREE.Mesh(boardGeo, maskMat);
+    boardMesh.castShadow = true;
+    boardMesh.receiveShadow = true;
+    boardGroup.add(boardMesh);
+  }, [state.board]);
+
+  // Initialize Three.js Scene, Camera, Lights, and Animation Loop
   useEffect(() => {
     if (!containerRef.current) return;
     const container = containerRef.current;
@@ -66,47 +144,51 @@ export const Board3DViewer: React.FC<Board3DViewerProps> = ({ state }) => {
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     rendererRef.current = renderer;
 
-    // Clear any previous canvas
     while (container.firstChild) {
       container.removeChild(container.firstChild);
     }
     container.appendChild(renderer.domElement);
 
-    // 4. Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
+    // 4. Studio Lighting setup for realistic PCB reflections
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
     scene.add(ambientLight);
 
-    const dirLight1 = new THREE.DirectionalLight(0xfff6ea, 1.6);
-    dirLight1.position.set(40, 50, 80);
+    const dirLight1 = new THREE.DirectionalLight(0xfff8ee, 1.8);
+    dirLight1.position.set(45, 55, 90);
     dirLight1.castShadow = true;
-    dirLight1.shadow.mapSize.width = 1024;
-    dirLight1.shadow.mapSize.height = 1024;
+    dirLight1.shadow.mapSize.width = 2048;
+    dirLight1.shadow.mapSize.height = 2048;
     scene.add(dirLight1);
 
-    const dirLight2 = new THREE.DirectionalLight(0x8bc0ff, 0.9);
-    dirLight2.position.set(-50, -40, 40);
+    const dirLight2 = new THREE.DirectionalLight(0x7fb4ff, 1.0);
+    dirLight2.position.set(-50, -45, 45);
     scene.add(dirLight2);
 
-    // Subtle floor shadow plane
-    const shadowGeo = new THREE.PlaneGeometry(160, 160);
-    const shadowMat = new THREE.ShadowMaterial({ opacity: 0.35 });
+    const dirLight3 = new THREE.DirectionalLight(0xffffff, 0.6);
+    dirLight3.position.set(0, 0, -80); // Under-board fill light for B.Cu traces
+    scene.add(dirLight3);
+
+    // Ground Grid & Shadow Plane
+    const shadowGeo = new THREE.PlaneGeometry(240, 240);
+    const shadowMat = new THREE.ShadowMaterial({ opacity: 0.25 });
     const shadowPlane = new THREE.Mesh(shadowGeo, shadowMat);
-    shadowPlane.position.z = -2;
+    shadowPlane.position.z = -15;
     shadowPlane.receiveShadow = true;
     scene.add(shadowPlane);
 
-    // Grid Floor
-    const gridHelper = new THREE.GridHelper(160, 32, 0x222a3d, 0x111624);
+    const gridHelper = new THREE.GridHelper(240, 36, 0x1a2333, 0x0c111a);
     gridHelper.rotation.x = Math.PI / 2;
-    gridHelper.position.z = -1.9;
+    gridHelper.position.z = -14.9;
     scene.add(gridHelper);
 
-    // 5. Board Group containing Substrate, Traces, Pads, and Components
+    // 5. Board Group container for GLTF / GLB model
     const boardGroup = new THREE.Group();
+    // Default isometric tilt
+    boardGroup.rotation.set(-Math.PI / 5, 0, Math.PI / 6);
     scene.add(boardGroup);
     boardGroupRef.current = boardGroup;
 
-    // 6. Animation loop
+    // 6. Animation render loop
     let animationFrameId: number;
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate);
@@ -135,236 +217,102 @@ export const Board3DViewer: React.FC<Board3DViewerProps> = ({ state }) => {
     };
   }, []);
 
-  // Re-build 3D PCB Geometry whenever CircuitState changes
+  // Load genuine KiCad GLB model whenever CircuitState changes (revision, project_id, sexpr)
   useEffect(() => {
+    let isCancelled = false;
     const boardGroup = boardGroupRef.current;
     if (!boardGroup) return;
 
-    // Clear previous board elements
-    while (boardGroup.children.length > 0) {
-      boardGroup.remove(boardGroup.children[0]);
-    }
+    // Immediately render procedural fallback board so the view is never empty
+    buildFallbackBoard();
 
-    const bw = state.board.width || 50;
-    const bh = state.board.height || 35;
-    const thickness = state.board.thickness || 1.6;
-    const maskColor = getMaskColor(state.board.mask_color || 'black');
-    const isEnig = state.board.finish === 'ENIG';
+    const projectId = state.project_id || 'antimatter';
+    const rev = state.revision || 1;
+    const glbUrl = `${getApiBase()}/projects/${projectId}/glb?rev=${rev}&t=${Date.now()}`;
 
-    // Board Substrate (FR4 + Solder Mask) with rounded corners
-    const shape = new THREE.Shape();
-    const r = Math.min(state.board.corner_radius || 2.5, bw / 4, bh / 4);
-    const hw = bw / 2;
-    const hh = bh / 2;
+    setIsLoadingGlb(true);
 
-    shape.moveTo(-hw + r, -hh);
-    shape.lineTo(hw - r, -hh);
-    shape.quadraticCurveTo(hw, -hh, hw, -hh + r);
-    shape.lineTo(hw, hh - r);
-    shape.quadraticCurveTo(hw, hh, hw - r, hh);
-    shape.lineTo(-hw + r, hh);
-    shape.quadraticCurveTo(-hw, hh, -hw, hh - r);
-    shape.lineTo(-hw, -hh + r);
-    shape.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
+    const loader = new GLTFLoader();
+    loader.load(
+      glbUrl,
+      (gltf) => {
+        if (isCancelled) return;
 
-    const extrudeSettings = {
-      depth: thickness,
-      bevelEnabled: true,
-      bevelSegments: 2,
-      steps: 1,
-      bevelSize: 0.1,
-      bevelThickness: 0.1,
+        const model = gltf.scene;
+        if (!model) {
+          setIsLoadingGlb(false);
+          return;
+        }
+
+        // Measure raw bounding box
+        const rawBox = new THREE.Box3().setFromObject(model);
+        if (rawBox.isEmpty()) {
+          console.warn('[Board3DViewer] GLB model is empty, keeping fallback board');
+          setIsLoadingGlb(false);
+          return;
+        }
+
+        const rawSize = rawBox.getSize(new THREE.Vector3());
+        const maxDim = Math.max(rawSize.x, rawSize.y, rawSize.z);
+
+        // CRITICAL FIX: KiCad exports glTF in METERS (e.g. 0.050 for 50mm board).
+        // If max dimension is in meters (< 1.0), scale up by 1000 to convert to millimeters.
+        if (maxDim > 0 && maxDim < 1.0) {
+          model.scale.set(1000, 1000, 1000);
+        }
+
+        // Re-compute bounding box after scaling
+        const scaledBox = new THREE.Box3().setFromObject(model);
+        const center = scaledBox.getCenter(new THREE.Vector3());
+        model.position.sub(center);
+
+        // Enable double-sided rendering, shadows, and depth write for copper traces & pads
+        model.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+            const mesh = child as THREE.Mesh;
+            if (mesh.material) {
+              const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+              mats.forEach((m) => {
+                m.side = THREE.DoubleSide;
+                m.depthWrite = true;
+              });
+            }
+          }
+        });
+
+        // Frame camera to comfortably encompass the board
+        const scaledSize = scaledBox.getSize(new THREE.Vector3());
+        const fitDim = Math.max(scaledSize.x, scaledSize.y, scaledSize.z) || 50;
+        if (cameraRef.current) {
+          const dist = Math.max(60, fitDim * 1.55);
+          cameraRef.current.position.set(0, -dist * 0.75, dist * 0.85);
+          cameraRef.current.lookAt(0, 0, 0);
+        }
+
+        // Clear fallback elements and mount genuine KiCad GLB
+        while (boardGroup.children.length > 0) {
+          boardGroup.remove(boardGroup.children[0]);
+        }
+        boardGroup.add(model);
+        setIsUsingNativeGlb(true);
+        setIsLoadingGlb(false);
+      },
+      undefined,
+      (err) => {
+        if (isCancelled) return;
+        console.warn('[Board3DViewer] Failed to load native KiCad GLB, keeping procedural substrate:', err);
+        buildFallbackBoard();
+        setIsUsingNativeGlb(false);
+        setIsLoadingGlb(false);
+      }
+    );
+
+    return () => {
+      isCancelled = true;
     };
-
-    const boardGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-    boardGeo.center();
-
-    // Solder Mask Material using MeshPhysicalMaterial
-    const maskMat = new THREE.MeshPhysicalMaterial({
-      color: maskColor,
-      roughness: 0.35,
-      metalness: 0.05,
-      clearcoat: 0.3,
-      clearcoatRoughness: 0.15,
-    });
-
-    const boardMesh = new THREE.Mesh(boardGeo, maskMat);
-    boardMesh.castShadow = true;
-    boardMesh.receiveShadow = true;
-    boardGroup.add(boardMesh);
-
-    // Gold / ENIG / HASL Pad Material
-    const padMat = new THREE.MeshStandardMaterial({
-      color: isEnig ? 0xd4af37 : 0xc0c4cc, // Gold vs Silver
-      metalness: 0.9,
-      roughness: 0.2,
-    });
-
-    // Top Copper Trace Material
-    const traceMat = new THREE.MeshStandardMaterial({
-      color: 0xcc7a00,
-      metalness: 0.8,
-      roughness: 0.3,
-    });
-
-    // Bottom Copper Trace Material
-    const bottomTraceMat = new THREE.MeshStandardMaterial({
-      color: 0x4a7cff,
-      metalness: 0.8,
-      roughness: 0.3,
-    });
-
-    const zTop = thickness / 2 + 0.05;
-    const zBottom = -thickness / 2 - 0.05;
-
-    // 1. Render Traces
-    if (showTraces && state.tracks) {
-      state.tracks.forEach((track) => {
-        const sx = track.start[0] - hw;
-        const sy = track.start[1] - hh;
-        const ex = track.end[0] - hw;
-        const ey = track.end[1] - hh;
-        const dx = ex - sx;
-        const dy = ey - sy;
-        const len = Math.sqrt(dx * dx + dy * dy);
-        if (len <= 0.01) return;
-
-        const trackGeo = new THREE.BoxGeometry(track.width || 0.3, len, 0.04);
-        const isTop = track.layer !== 'B.Cu';
-        const tMesh = new THREE.Mesh(trackGeo, isTop ? traceMat : bottomTraceMat);
-        tMesh.position.set((sx + ex) / 2, (sy + ey) / 2, isTop ? zTop : zBottom);
-        tMesh.rotation.z = Math.atan2(dy, dx) - Math.PI / 2;
-        boardGroup.add(tMesh);
-      });
-    }
-
-    // 2. Render Component Footprints, Pads, and 3D Packages
-    if (showComponents && state.components) {
-      Object.values(state.components).forEach((comp: ComponentItem) => {
-        const cx = comp.x - hw;
-        const cy = comp.y - hh;
-        const rotRad = (comp.rotation * Math.PI) / 180;
-
-        const compGroup = new THREE.Group();
-        compGroup.position.set(cx, cy, zTop);
-        compGroup.rotation.z = rotRad;
-
-        // Render Component Pads
-        if (comp.pins) {
-          Object.values(comp.pins).forEach((pin) => {
-            const px = pin.x_offset || 0;
-            const py = pin.y_offset || 0;
-            const padGeo = new THREE.BoxGeometry(1.2, 1.4, 0.06);
-            const padMesh = new THREE.Mesh(padGeo, padMat);
-            padMesh.position.set(px, py, 0.02);
-            compGroup.add(padMesh);
-          });
-        }
-
-        // Render 3D Component Models based on part type
-        const valLower = (comp.value || '').toLowerCase();
-        const refUpper = (comp.ref || '').toUpperCase();
-
-        if (refUpper.startsWith('R') || refUpper.startsWith('C')) {
-          // 0805 / 0603 SMD Passive
-          const bodyColor = refUpper.startsWith('C') ? 0xb58d63 : 0x1a1a1a;
-          const bodyGeo = new THREE.BoxGeometry(1.4, 1.0, 0.7);
-          const bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.5 });
-          const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
-          bodyMesh.position.z = 0.35;
-          bodyMesh.castShadow = true;
-          compGroup.add(bodyMesh);
-
-          // Metal end terminations
-          const capGeo = new THREE.BoxGeometry(0.35, 1.02, 0.72);
-          const capMat = new THREE.MeshStandardMaterial({ color: 0xd0d5dd, metalness: 0.85, roughness: 0.2 });
-          const cap1 = new THREE.Mesh(capGeo, capMat);
-          cap1.position.set(-0.7, 0, 0.35);
-          const cap2 = new THREE.Mesh(capGeo, capMat);
-          cap2.position.set(0.7, 0, 0.35);
-          compGroup.add(cap1, cap2);
-
-        } else if (refUpper.startsWith('D')) {
-          // SMD LED 0805
-          const ledGeo = new THREE.BoxGeometry(1.6, 1.0, 0.7);
-          const isBlue = valLower.includes('blue');
-          const isRed = valLower.includes('red');
-          const ledColor = isBlue ? 0x00e5ff : (isRed ? 0xff3b5c : 0x10b981);
-
-          const ledMat = new THREE.MeshPhysicalMaterial({
-            color: ledColor,
-            roughness: 0.1,
-            transmission: 0.7,
-            opacity: 0.9,
-            transparent: true,
-            emissive: ledColor,
-            emissiveIntensity: 0.5,
-          });
-          const ledMesh = new THREE.Mesh(ledGeo, ledMat);
-          ledMesh.position.z = 0.35;
-          compGroup.add(ledMesh);
-
-        } else if (valLower.includes('ams1117') || valLower.includes('ldo') || valLower.includes('regulator')) {
-          // SOT-223 Voltage Regulator
-          const icBodyGeo = new THREE.BoxGeometry(6.5, 3.5, 1.6);
-          const icMat = new THREE.MeshStandardMaterial({ color: 0x1e2229, roughness: 0.6 });
-          const icMesh = new THREE.Mesh(icBodyGeo, icMat);
-          icMesh.position.z = 0.8;
-          icMesh.castShadow = true;
-          compGroup.add(icMesh);
-
-          // Metal cooling tab
-          const tabGeo = new THREE.BoxGeometry(3.2, 2.0, 0.3);
-          const tabMesh = new THREE.Mesh(tabGeo, padMat);
-          tabMesh.position.set(0, 2.2, 0.15);
-          compGroup.add(tabMesh);
-
-        } else if (valLower.includes('usb')) {
-          // USB-C Receptacle
-          const shieldGeo = new THREE.BoxGeometry(8.9, 7.3, 3.1);
-          const shieldMat = new THREE.MeshStandardMaterial({ color: 0xc4cacf, metalness: 0.9, roughness: 0.15 });
-          const shieldMesh = new THREE.Mesh(shieldGeo, shieldMat);
-          shieldMesh.position.z = 1.55;
-          shieldMesh.castShadow = true;
-          compGroup.add(shieldMesh);
-
-          // Center tongue slot
-          const slotGeo = new THREE.BoxGeometry(7.0, 4.0, 1.2);
-          const slotMat = new THREE.MeshBasicMaterial({ color: 0x0a0c10 });
-          const slotMesh = new THREE.Mesh(slotGeo, slotMat);
-          slotMesh.position.set(0, -1.8, 1.55);
-          compGroup.add(slotMesh);
-
-        } else if (valLower.includes('esp32')) {
-          // ESP32-C3 / Wireless Module
-          const modGeo = new THREE.BoxGeometry(18.0, 20.0, 2.8);
-          const modMat = new THREE.MeshStandardMaterial({ color: 0xc8d0d8, metalness: 0.85, roughness: 0.25 });
-          const modMesh = new THREE.Mesh(modGeo, modMat);
-          modMesh.position.z = 1.4;
-          modMesh.castShadow = true;
-          compGroup.add(modMesh);
-
-          // Antenna Keepout Area (black PCB edge)
-          const antGeo = new THREE.BoxGeometry(18.0, 5.0, 0.2);
-          const antMat = new THREE.MeshStandardMaterial({ color: 0x12141a, roughness: 0.7 });
-          const antMesh = new THREE.Mesh(antGeo, antMat);
-          antMesh.position.set(0, 7.5, 1.4);
-          compGroup.add(antMesh);
-
-        } else {
-          // Generic IC or Header
-          const genGeo = new THREE.BoxGeometry(8.0, 4.0, 2.0);
-          const genMat = new THREE.MeshStandardMaterial({ color: 0x1c1e24, roughness: 0.5 });
-          const genMesh = new THREE.Mesh(genGeo, genMat);
-          genMesh.position.z = 1.0;
-          genMesh.castShadow = true;
-          compGroup.add(genMesh);
-        }
-
-        boardGroup.add(compGroup);
-      });
-    }
-  }, [state, showTraces, showComponents]);
+  }, [state.project_id, state.revision, state.pcb_sexpr, buildFallbackBoard]);
 
   // Mouse Orbit & Pan Interaction Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -398,7 +346,7 @@ export const Board3DViewer: React.FC<Board3DViewerProps> = ({ state }) => {
     if (!cameraRef.current) return;
     e.preventDefault();
     const zoomFactor = e.deltaY * 0.05;
-    cameraRef.current.position.z = Math.max(20, Math.min(200, cameraRef.current.position.z + zoomFactor));
+    cameraRef.current.position.z = Math.max(15, Math.min(220, cameraRef.current.position.z + zoomFactor));
   };
 
   // Camera Presets
@@ -423,6 +371,14 @@ export const Board3DViewer: React.FC<Board3DViewerProps> = ({ state }) => {
     cameraRef.current.lookAt(0, 0, 0);
   };
 
+  const handleDownloadGlb = () => {
+    const glbUrl = `${getApiBase()}/projects/${state.project_id}/glb`;
+    const link = document.createElement('a');
+    link.href = glbUrl;
+    link.download = `${state.project_id}_3d_model.glb`;
+    link.click();
+  };
+
   return (
     <div className="relative w-full h-full overflow-hidden eda-grid-bg" style={{ position: 'relative' }}>
       {/* 3D WebGL Canvas Viewport */}
@@ -437,6 +393,41 @@ export const Board3DViewer: React.FC<Board3DViewerProps> = ({ state }) => {
         style={{ width: '100%', height: '100%' }}
       />
 
+      {/* Loading Indicator Overlay */}
+      {isLoadingGlb && (
+        <div
+          className="absolute inset-0 flex items-center justify-center pointer-events-none"
+          style={{ background: 'rgba(7, 8, 12, 0.45)', backdropFilter: 'blur(3px)', zIndex: 10 }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              padding: '8px 16px',
+              background: '#0d111a',
+              border: '1px solid #1e293b',
+              borderRadius: '8px',
+              color: '#00e5ff',
+              fontSize: '12px',
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            <div
+              style={{
+                width: '14px',
+                height: '14px',
+                border: '2px solid rgba(0,229,255,0.2)',
+                borderTopColor: '#00e5ff',
+                borderRadius: '50%',
+                animation: 'spin 0.8s linear infinite',
+              }}
+            />
+            <span>Exporting KiCad 3D GLB Geometry...</span>
+          </div>
+        </div>
+      )}
+
       {/* Floating Precision 3D HUD Controls */}
       <div
         className="absolute flex items-center justify-between"
@@ -447,7 +438,7 @@ export const Board3DViewer: React.FC<Board3DViewerProps> = ({ state }) => {
           pointerEvents: 'none',
         }}
       >
-        {/* Camera Views Selector */}
+        {/* Camera Views & Background Selector */}
         <div
           className="flex items-center"
           style={{
@@ -455,35 +446,80 @@ export const Board3DViewer: React.FC<Board3DViewerProps> = ({ state }) => {
             backdropFilter: 'blur(12px)',
             border: '1px solid #252b3d',
             borderRadius: '8px',
-            padding: '4px',
-            gap: '4px',
+            padding: '4px 6px',
+            gap: '6px',
             pointerEvents: 'auto',
           }}
         >
+          {/* Preset Buttons */}
           <button
             onClick={() => setCameraPreset('iso')}
             className={`btn btn-ghost font-mono ${activePreset === 'iso' ? 'btn-primary' : ''}`}
-            style={{ padding: '4px 10px', fontSize: '11px' }}
+            style={{ padding: '4px 8px', fontSize: '11px' }}
           >
-            ISO 3D
+            ISO
           </button>
           <button
             onClick={() => setCameraPreset('top')}
             className={`btn btn-ghost font-mono ${activePreset === 'top' ? 'btn-primary' : ''}`}
-            style={{ padding: '4px 10px', fontSize: '11px' }}
+            style={{ padding: '4px 8px', fontSize: '11px' }}
           >
-            TOP (F.Cu)
+            TOP
           </button>
           <button
             onClick={() => setCameraPreset('bottom')}
             className={`btn btn-ghost font-mono ${activePreset === 'bottom' ? 'btn-primary' : ''}`}
-            style={{ padding: '4px 10px', fontSize: '11px' }}
+            style={{ padding: '4px 8px', fontSize: '11px' }}
           >
-            BOTTOM (B.Cu)
+            BOT
           </button>
+
+          {/* Divider */}
+          <div style={{ width: '1px', height: '16px', background: '#252b3d', margin: '0 2px' }} />
+
+          {/* Background color options */}
+          <span style={{ fontSize: '10px', color: '#64748b', fontFamily: 'var(--font-mono)' }}>BG:</span>
+          {THREE_D_BG_OPTIONS.map((opt) => {
+            const isSel = opt.id === activeBg.id;
+            return (
+              <button
+                key={opt.id}
+                onClick={() => {
+                  setActiveBgId(opt.id);
+                  localStorage.setItem('antimatter_3d_bg', opt.id);
+                }}
+                title={`Set 3D background: ${opt.label}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '3px 6px',
+                  borderRadius: '4px',
+                  border: isSel ? '1px solid #00e5ff' : '1px solid #232b3e',
+                  background: isSel ? 'rgba(0,229,255,0.12)' : 'transparent',
+                  color: isSel ? '#00e5ff' : '#94a3b8',
+                  fontSize: '10px',
+                  fontFamily: 'var(--font-mono)',
+                  cursor: 'pointer',
+                }}
+              >
+                <span
+                  style={{
+                    width: '7px',
+                    height: '7px',
+                    borderRadius: '50%',
+                    background: opt.color,
+                    border: isSel ? '1px solid #00e5ff' : '1px solid rgba(255,255,255,0.3)',
+                    display: 'inline-block',
+                  }}
+                />
+                <span>{opt.label}</span>
+              </button>
+            );
+          })}
         </div>
 
-        {/* Layer & Geometry Toggles */}
+        {/* Engine Status & GLB Export */}
         <div
           className="flex items-center"
           style={{
@@ -492,28 +528,38 @@ export const Board3DViewer: React.FC<Board3DViewerProps> = ({ state }) => {
             border: '1px solid #252b3d',
             borderRadius: '8px',
             padding: '4px 8px',
-            gap: '8px',
+            gap: '10px',
             pointerEvents: 'auto',
           }}
         >
-          <label className="flex items-center font-mono" style={{ fontSize: '11px', gap: '5px', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={showTraces}
-              onChange={(e) => setShowTraces(e.target.checked)}
-              style={{ accentColor: '#00e5ff' }}
+          <span
+            className="flex items-center font-mono"
+            style={{
+              fontSize: '11px',
+              color: isUsingNativeGlb ? '#10b981' : '#eab308',
+              gap: '6px',
+            }}
+          >
+            <span
+              style={{
+                width: '7px',
+                height: '7px',
+                borderRadius: '50%',
+                background: isUsingNativeGlb ? '#10b981' : '#eab308',
+                boxShadow: isUsingNativeGlb ? '0 0 8px #10b981' : 'none',
+              }}
             />
-            Copper Traces
-          </label>
-          <label className="flex items-center font-mono" style={{ fontSize: '11px', gap: '5px', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={showComponents}
-              onChange={(e) => setShowComponents(e.target.checked)}
-              style={{ accentColor: '#00e5ff' }}
-            />
-            3D Components
-          </label>
+            {isUsingNativeGlb ? 'KiCad Native 3D (GLB)' : 'Interactive Preview'}
+          </span>
+
+          <button
+            onClick={handleDownloadGlb}
+            className="btn btn-ghost font-mono"
+            style={{ padding: '4px 10px', fontSize: '11px', color: '#00e5ff' }}
+            title="Download full 3D GLB model for Blender, FreeCAD or MCAD"
+          >
+            Download .glb
+          </button>
         </div>
       </div>
 
@@ -544,3 +590,5 @@ export const Board3DViewer: React.FC<Board3DViewerProps> = ({ state }) => {
     </div>
   );
 };
+
+export default Board3DViewer;

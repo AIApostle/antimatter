@@ -24,6 +24,7 @@ logger.info("🚀 Antimatter EDA Platform Backend Initializing...")
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.api.routes import router as api_router
+from src.auth.routes import router as auth_router
 
 app = FastAPI(
     title="Antimotion EDA API",
@@ -56,6 +57,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+app.include_router(auth_router, prefix="/api")
 
 
 @app.get("/health")

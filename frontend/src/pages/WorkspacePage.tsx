@@ -633,7 +633,7 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = ({
   isApproving = false,
 }) => {
   const activeProjectId = projectId || circuitState?.project_id || '';
-  const isProjectEco = pendingEco && (!pendingEco.project_id || pendingEco.project_id === activeProjectId);
+  const isProjectEco = pendingEco && (!pendingEco.project_id || pendingEco.project_id === activeProjectId) && pendingEco.status !== 'approved' && pendingEco.status !== 'rejected';
 
   // Top header tabs: AI, Schematics, PCB Layout, Plans, BOM, 3D View
   const [activeTab, setActiveTab] = useState<ProjectTab>('ai');
@@ -958,8 +958,8 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = ({
                     </div>
                   )}
 
-                  {/* ECO proposal card */}
-                  {isProjectEco && pendingEco && (
+                  {/* ECO proposal card - strictly hidden immediately upon approval */}
+                  {isProjectEco && pendingEco && pendingEco.status !== 'approved' && pendingEco.status !== 'rejected' && (
                     <EcoCard
                       eco={pendingEco}
                       onApprove={onApproveEco}

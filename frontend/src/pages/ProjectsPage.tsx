@@ -56,18 +56,22 @@ export const ProjectsPage: React.FC<ProjectsPageProps> = ({ onSelectProject, onO
     fetchProjects();
   }, []);
 
-  const handleDelete = async (projectId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!window.confirm(`Are you sure you want to permanently delete project "${projectId}"?`)) {
-      return;
-    }
+  const [projectToDelete, setProjectToDelete] = useState<ProjectSummary | null>(null);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+
+  const confirmDeleteProject = async () => {
+    if (!projectToDelete) return;
+    setIsDeleting(true);
     try {
-      const res = await fetch(`${getApiBase()}/projects/${projectId}`, { method: 'DELETE' });
+      const res = await fetch(`${getApiBase()}/projects/${projectToDelete.project_id}`, { method: 'DELETE' });
       if (res.ok) {
         await fetchProjects();
+        setProjectToDelete(null);
       }
     } catch (err) {
       console.error('Failed to delete project:', err);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -372,7 +376,10 @@ export const ProjectsPage: React.FC<ProjectsPageProps> = ({ onSelectProject, onO
                     ⬇ ZIP
                   </a>
                   <button
-                    onClick={(e) => handleDelete(proj.project_id, e)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setProjectToDelete(proj);
+                    }}
                     className="btn btn-ghost"
                     style={{ fontSize: '13px', padding: '7px 10px', color: '#f43f5e', border: '1px solid rgba(244,63,94,0.2)' }}
                     title="Delete Project"
@@ -382,6 +389,129 @@ export const ProjectsPage: React.FC<ProjectsPageProps> = ({ onSelectProject, onO
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Custom In-App Delete Confirmation Modal Popup */}
+        {projectToDelete && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0, 0, 0, 0.78)',
+              backdropFilter: 'blur(8px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 2000,
+              padding: '16px',
+            }}
+            onClick={() => !isDeleting && setProjectToDelete(null)}
+          >
+            <div
+              style={{
+                width: '100%',
+                maxWidth: '460px',
+                background: 'linear-gradient(180deg, #101522 0%, #0a0d14 100%)',
+                border: '1px solid rgba(244, 63, 94, 0.4)',
+                boxShadow: '0 0 40px rgba(244, 63, 94, 0.18), 0 20px 40px rgba(0,0,0,0.6)',
+                borderRadius: '16px',
+                padding: '24px',
+                position: 'relative',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px' }}>
+                <div
+                  style={{
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '10px',
+                    background: 'rgba(244, 63, 94, 0.12)',
+                    border: '1px solid rgba(244, 63, 94, 0.3)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '20px',
+                    flexShrink: 0,
+                  }}
+                >
+                  🗑️
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#f8fafc' }}>
+                    Delete Circuit Project?
+                  </h3>
+                  <div style={{ fontSize: '11px', color: '#f43f5e', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
+                    Permanent Action
+                  </div>
+                </div>
+              </div>
+
+              <p style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: '1.6', margin: '0 0 14px' }}>
+                Are you sure you want to delete <strong style={{ color: '#f1f5f9' }}>{projectToDelete.project_name}</strong> (<code style={{ color: '#00e5ff' }}>{projectToDelete.project_id}</code>)?
+              </p>
+
+              <div
+                style={{
+                  padding: '12px 14px',
+                  borderRadius: '8px',
+                  background: 'rgba(244, 63, 94, 0.08)',
+                  border: '1px solid rgba(244, 63, 94, 0.25)',
+                  fontSize: '11px',
+                  color: '#fca5a5',
+                  lineHeight: '1.5',
+                  marginBottom: '20px',
+                  fontFamily: 'var(--font-mono)',
+                }}
+              >
+                ⚠️ This will permanently remove all KiCad schematic sheets, PCB layout geometries, copper traces, DRC diagnostics, and AI chat transcripts from Supabase.
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => setProjectToDelete(null)}
+                  className="btn btn-ghost"
+                  style={{ padding: '8px 16px', fontSize: '13px', borderRadius: '8px', border: '1px solid #243048' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={confirmDeleteProject}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '8px 18px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: '#f43f5e',
+                    color: '#fff',
+                    fontSize: '13px',
+                    fontWeight: 700,
+                    cursor: isDeleting ? 'not-allowed' : 'pointer',
+                    boxShadow: '0 0 18px rgba(244, 63, 94, 0.4)',
+                    opacity: isDeleting ? 0.7 : 1,
+                  }}
+                >
+                  {isDeleting ? (
+                    <>
+                      <div style={{ width: '14px', height: '14px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                      <span>Deleting from Supabase...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>🗑️</span>
+                      <span>Delete from Supabase</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

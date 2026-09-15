@@ -9,10 +9,18 @@ import io
 import zipfile
 import csv
 import uuid
+import os
+import subprocess
+import tempfile
+import shutil
+import logging
+from pathlib import Path
 from typing import Dict, Optional, Any
 from .circuit_state import CircuitState, BoardSetup, Component, Pin, Net, TrackSegment, Via
 from .component_library import lookup_component
 from .sexpr_generator import generate_schematic_sexpr, generate_pcb_sexpr
+
+logger = logging.getLogger("antimatter.project_manager")
 
 
 class ProjectManager:
@@ -222,6 +230,47 @@ class ProjectManager:
 
         zip_buffer.seek(0)
         return zip_buffer.getvalue()
+
+    def export_kicad_glb(self, project_id: str) -> Optional[bytes]:
+        """Export the active .kicad_pcb to a photorealistic binary GLTF (.glb) using KiCad CLI.
+        
+        Includes physical copper tracks, SMD/THT pads, zones, silkscreen, soldermask,
+        and genuine 3D component models.
+        """
+        state = self.get_project(project_id)
+        if not state:
+            return None
+
+        pcb_text = state.pcb_sexpr or generate_pcb_sexpr(state)
+        kicad_cli = "/usr/bin/kicad-cli"
+        if not os.path.exists(kicad_cli):
+            kicad_cli = shutil.which("kicad-cli") or "kicad-cli"
+
+        with tempfile.TemporaryDirectory() as td:
+            pcb_path = Path(td) / f"{project_id}.kicad_pcb"
+            pcb_path.write_text(pcb_text, encoding="utf-8")
+            glb_path = Path(td) / f"{project_id}.glb"
+
+            cmd = [
+                kicad_cli, "pcb", "export", "glb",
+                "--include-tracks",
+                "--include-pads",
+                "--include-zones",
+                "--include-silkscreen",
+                "--include-soldermask",
+                "--subst-models",
+                "--force",
+                "-o", str(glb_path),
+                str(pcb_path),
+            ]
+            try:
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+                if res.returncode == 0 and glb_path.exists():
+                    return glb_path.read_bytes()
+                logger.warning("kicad-cli export glb returned non-zero (%d): %s", res.returncode, res.stderr)
+            except Exception as e:
+                logger.error("Failed to run kicad-cli glb export for project %s: %s", project_id, e)
+            return None
 
 
 # Global project manager singleton

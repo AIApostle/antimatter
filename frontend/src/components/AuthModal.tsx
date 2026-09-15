@@ -7,7 +7,7 @@ interface AuthModalProps {
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
-  const { signInWithEmail, signUpWithEmail, signInAsGuest } = useAuth();
+  const { signInWithEmail, signUpWithEmail } = useAuth();
   const [tab, setTab] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -45,11 +45,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleGuest = () => {
-    signInAsGuest();
-    onClose();
   };
 
   return (
@@ -248,31 +243,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
           </button>
         </form>
 
-        <div className="flex items-center my-3" style={{ gap: '8px', margin: '14px 0' }}>
-          <div style={{ flex: 1, height: '1px', background: '#1c2230' }} />
-          <span style={{ fontSize: '10px', color: '#64748b', textTransform: 'uppercase' }}>or</span>
-          <div style={{ flex: 1, height: '1px', background: '#1c2230' }} />
-        </div>
-
-        {/* Quick Demo Access */}
-        <button
-          type="button"
-          onClick={handleGuest}
-          className="btn font-mono w-full"
-          style={{
-            fontSize: '11px',
-            padding: '8px',
-            border: '1px solid #243048',
-            background: '#121824',
-            color: '#38bdf8',
-            borderRadius: '6px',
-            width: '100%',
-          }}
-        >
-          ⚡ Quick Demo / Guest Access
-        </button>
-
-        <div style={{ marginTop: '14px', fontSize: '10px', color: '#64748b', textAlign: 'center' }}>
+        <div style={{ marginTop: '16px', fontSize: '10px', color: '#64748b', textAlign: 'center' }}>
           ✓ Enterprise Hardware Platform · End-to-End Encrypted Workspace
         </div>
       </div>

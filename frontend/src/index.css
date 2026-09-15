@@ -185,3 +185,13 @@ kicanvas-embed {
   height: 100%;
   background: #080a10;
 }
+
+/* Suppress tap-to-interact overlay */
+kc-ui-focus-overlay,
+.kc-ui-focus-overlay,
+[data-focus-overlay] {
+  display: none !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+}
+

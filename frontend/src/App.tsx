@@ -2,8 +2,10 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { CircuitState, ChatMessage, AIModel, HumanDecisionRequest, ApprovalMode } from './types/eda';
 import { kicanvasMcpServer } from './mcp/kicanvasMcpServer';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import type { AppUser, UserDetails } from './context/AuthContext';
 import { LandingPage } from './pages/LandingPage';
 import { AuthPage } from './pages/AuthPage';
+import type { AuthMode } from './pages/AuthPage';
 import { HomePage, OPENROUTER_MODELS } from './pages/HomePage';
 import { WorkspacePage } from './pages/WorkspacePage';
 import { ProjectsPage } from './pages/ProjectsPage';
@@ -17,7 +19,7 @@ const API_BASE = getApiBase();
 
 type TopView = 'landing' | 'auth' | 'app';
 type AppPage = 'home' | 'workspace' | 'projects' | 'connectors' | 'knowledge';
-type AuthTab  = 'signin' | 'signup';
+type AuthTab = AuthMode;
 
 // ── Sidebar ───────────────────────────────────────────────────────────────
 interface SidebarProps {
@@ -28,6 +30,8 @@ interface SidebarProps {
   onSignOut: () => void;
   onOpenSettings: () => void;
   onNewChat: () => void;
+  isCollapsed: boolean;
+  onToggleCollapse: () => void;
 }
 
 const NAV: { key: AppPage; icon: string; label: string }[] = [
@@ -38,42 +42,82 @@ const NAV: { key: AppPage; icon: string; label: string }[] = [
 
 const Sidebar: React.FC<SidebarProps> = ({
   activePage, onNavigate, activeProjectName, userName, onSignOut, onOpenSettings, onNewChat,
+  isCollapsed, onToggleCollapse,
 }) => (
   <aside
     style={{
-      width: '220px',
+      width: isCollapsed ? '64px' : '220px',
       flexShrink: 0,
       height: '100%',
       display: 'flex',
       flexDirection: 'column',
       background: '#090c12',
       borderRight: '1px solid #141c2b',
+      transition: 'width 0.22s cubic-bezier(0.4, 0, 0.2, 1)',
+      overflow: 'hidden',
+      position: 'relative',
     }}
   >
-    {/* Brand */}
+    {/* Brand Header */}
     <div
       style={{
-        padding: '18px 20px 14px',
+        padding: isCollapsed ? '16px 8px 14px' : '18px 16px 14px',
         borderBottom: '1px solid #141c2b',
         display: 'flex',
+        flexDirection: isCollapsed ? 'column' : 'row',
         alignItems: 'center',
-        gap: '9px',
+        justifyContent: isCollapsed ? 'center' : 'space-between',
+        gap: isCollapsed ? '10px' : '8px',
         flexShrink: 0,
       }}
     >
-      <AntimatterLogo size={22} fontSize={15} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: isCollapsed ? 'center' : 'flex-start', minWidth: 0, overflow: 'hidden' }}>
+        <AntimatterLogo size={22} fontSize={15} showText={!isCollapsed} />
+      </div>
+      <button
+        onClick={onToggleCollapse}
+        title={isCollapsed ? 'Expand sidebar (Ctrl+[)' : 'Collapse sidebar (Ctrl+[)'}
+        style={{
+          background: isCollapsed ? 'rgba(255,255,255,0.03)' : 'transparent',
+          border: '1px solid #1c2636',
+          borderRadius: '6px',
+          color: '#64748b',
+          cursor: 'pointer',
+          padding: isCollapsed ? '5px 7px' : '4px 7px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '10px',
+          transition: 'all 0.15s',
+          flexShrink: 0,
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.borderColor = '#00e5ff';
+          e.currentTarget.style.color = '#00e5ff';
+          e.currentTarget.style.background = 'rgba(0,229,255,0.08)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.borderColor = '#1c2636';
+          e.currentTarget.style.color = '#64748b';
+          e.currentTarget.style.background = isCollapsed ? 'rgba(255,255,255,0.03)' : 'transparent';
+        }}
+      >
+        {isCollapsed ? '▶' : '◀'}
+      </button>
     </div>
 
     {/* + New Chat button (ChatGPT UI) */}
-    <div style={{ padding: '12px 10px 4px' }}>
+    <div style={{ padding: isCollapsed ? '10px 8px 4px' : '12px 10px 4px' }}>
       <button
         onClick={onNewChat}
+        title={isCollapsed ? 'New chat' : undefined}
         style={{
           width: '100%',
           display: 'flex',
           alignItems: 'center',
+          justifyContent: isCollapsed ? 'center' : 'flex-start',
           gap: '9px',
-          padding: '9px 12px',
+          padding: isCollapsed ? '9px 0' : '9px 12px',
           borderRadius: '8px',
           border: activePage === 'home' ? '1px solid #00e5ff' : '1px solid #1e2d44',
           background: activePage === 'home' ? 'rgba(0,229,255,0.1)' : '#0d1119',
@@ -98,7 +142,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         }}
       >
         <span style={{ fontSize: '16px', color: '#00e5ff', lineHeight: 1 }}>+</span>
-        <span>New chat</span>
+        {!isCollapsed && <span>New chat</span>}
       </button>
     </div>
 
@@ -106,42 +150,48 @@ const Sidebar: React.FC<SidebarProps> = ({
     {activeProjectName && (
       <button
         onClick={() => onNavigate('workspace')}
+        title={isCollapsed ? `Active Workspace: ${activeProjectName}` : undefined}
         style={{
-          margin: '10px 8px 0',
-          padding: '8px 12px',
+          margin: isCollapsed ? '8px 8px 0' : '10px 8px 0',
+          padding: isCollapsed ? '8px 0' : '8px 12px',
           borderRadius: '8px',
           background: activePage === 'workspace' ? 'rgba(0,229,255,0.08)' : 'rgba(255,255,255,0.03)',
           border: activePage === 'workspace' ? '1px solid rgba(0,229,255,0.25)' : '1px solid #1a2233',
           display: 'flex',
           alignItems: 'center',
+          justifyContent: isCollapsed ? 'center' : 'flex-start',
           gap: '8px',
           cursor: 'pointer',
           textAlign: 'left',
-          width: 'calc(100% - 16px)',
+          width: isCollapsed ? 'calc(100% - 16px)' : 'calc(100% - 16px)',
           transition: 'all 0.15s',
         }}
       >
-        <span style={{ fontSize: '12px', color: '#00e5ff' }}>⚡</span>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', color: activePage === 'workspace' ? '#38bdf8' : '#64748b', letterSpacing: '0.5px', textTransform: 'uppercase' }}>Workspace</div>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: activePage === 'workspace' ? '#f1f5f9' : '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeProjectName}</div>
-        </div>
+        <span style={{ fontSize: '13px', color: '#00e5ff' }}>⚡</span>
+        {!isCollapsed && (
+          <div style={{ minWidth: 0, overflow: 'hidden' }}>
+            <div style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', color: activePage === 'workspace' ? '#38bdf8' : '#64748b', letterSpacing: '0.5px', textTransform: 'uppercase' }}>Workspace</div>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: activePage === 'workspace' ? '#f1f5f9' : '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeProjectName}</div>
+          </div>
+        )}
       </button>
     )}
 
-    {/* Nav */}
-    <nav style={{ padding: '10px 8px', flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '4px' }}>
+    {/* Nav Links */}
+    <nav style={{ padding: '10px 8px', flex: 1, display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
       {NAV.map(({ key, icon, label }) => {
         const isActive = activePage === key;
         return (
           <button
             key={key}
             onClick={() => onNavigate(key)}
+            title={isCollapsed ? label : undefined}
             style={{
               display: 'flex',
               alignItems: 'center',
+              justifyContent: isCollapsed ? 'center' : 'flex-start',
               gap: '10px',
-              padding: '9px 12px',
+              padding: isCollapsed ? '9px 0' : '9px 12px',
               borderRadius: '8px',
               border: 'none',
               background: isActive ? 'rgba(0,229,255,0.1)' : 'transparent',
@@ -149,10 +199,10 @@ const Sidebar: React.FC<SidebarProps> = ({
               cursor: 'pointer',
               fontSize: '13px',
               fontWeight: isActive ? 700 : 500,
-              textAlign: 'left',
+              textAlign: isCollapsed ? 'center' : 'left',
               width: '100%',
               transition: 'all 0.15s',
-              borderLeft: isActive ? '2px solid #00e5ff' : '2px solid transparent',
+              borderLeft: !isCollapsed && isActive ? '2px solid #00e5ff' : '2px solid transparent',
             }}
             onMouseEnter={(e) => {
               if (!isActive) {
@@ -168,37 +218,57 @@ const Sidebar: React.FC<SidebarProps> = ({
             }}
           >
             <span style={{ fontSize: '16px', lineHeight: 1 }}>{icon}</span>
-            <span>{label}</span>
+            {!isCollapsed && <span>{label}</span>}
           </button>
         );
       })}
     </nav>
 
     {/* Bottom: Settings + User */}
-    <div style={{ padding: '10px 8px', borderTop: '1px solid #141c2b', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+    <div style={{ padding: isCollapsed ? '10px 6px' : '10px 8px', borderTop: '1px solid #141c2b', display: 'flex', flexDirection: 'column', gap: '4px' }}>
       <button
         onClick={onOpenSettings}
+        title={isCollapsed ? 'Settings' : undefined}
         style={{
-          display: 'flex', alignItems: 'center', gap: '10px',
-          padding: '9px 12px', borderRadius: '8px', border: 'none',
-          background: 'transparent', color: '#64748b', cursor: 'pointer',
-          fontSize: '13px', fontWeight: 500, textAlign: 'left', width: '100%', transition: 'all 0.15s',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: isCollapsed ? 'center' : 'flex-start',
+          gap: '10px',
+          padding: isCollapsed ? '9px 0' : '9px 12px',
+          borderRadius: '8px',
+          border: 'none',
+          background: 'transparent',
+          color: '#64748b',
+          cursor: 'pointer',
+          fontSize: '13px',
+          fontWeight: 500,
+          textAlign: isCollapsed ? 'center' : 'left',
+          width: '100%',
+          transition: 'all 0.15s',
         }}
         onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.04)'; (e.currentTarget as HTMLButtonElement).style.color = '#cbd5e1'; }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; (e.currentTarget as HTMLButtonElement).style.color = '#64748b'; }}
       >
         <span style={{ fontSize: '14px' }}>⚙</span>
-        <span>Settings</span>
+        {!isCollapsed && <span>Settings</span>}
       </button>
 
       <div
         style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '8px 12px', borderRadius: '8px',
-          background: 'rgba(255,255,255,0.03)', border: '1px solid #1a2438', marginTop: '4px',
+          display: 'flex',
+          flexDirection: isCollapsed ? 'column' : 'row',
+          alignItems: 'center',
+          justifyContent: isCollapsed ? 'center' : 'space-between',
+          gap: isCollapsed ? '8px' : '0',
+          padding: isCollapsed ? '8px 4px' : '8px 12px',
+          borderRadius: '8px',
+          background: 'rgba(255,255,255,0.03)',
+          border: '1px solid #1a2438',
+          marginTop: '2px',
         }}
+        title={isCollapsed ? `${userName} (Signed in)` : undefined}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, justifyContent: isCollapsed ? 'center' : 'flex-start' }}>
           <div style={{
             width: '26px', height: '26px', borderRadius: '50%',
             background: 'linear-gradient(135deg,#00e5ff,#3b82f6)',
@@ -207,15 +277,27 @@ const Sidebar: React.FC<SidebarProps> = ({
           }}>
             {userName.charAt(0).toUpperCase()}
           </div>
-          <span style={{ fontSize: '12px', fontWeight: 600, color: '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {userName}
-          </span>
+          {!isCollapsed && (
+            <span style={{ fontSize: '12px', fontWeight: 600, color: '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {userName}
+            </span>
+          )}
         </div>
         <button
           onClick={onSignOut}
           title="Sign out"
-          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#475569', fontSize: '13px', padding: '2px 4px', borderRadius: '4px', flexShrink: 0, transition: 'color 0.15s' }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = '#94a3b8')}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            color: '#475569',
+            fontSize: '13px',
+            padding: '2px 4px',
+            borderRadius: '4px',
+            flexShrink: 0,
+            transition: 'color 0.15s',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = '#ef4444')}
           onMouseLeave={(e) => (e.currentTarget.style.color = '#475569')}
         >
           ↩
@@ -226,27 +308,90 @@ const Sidebar: React.FC<SidebarProps> = ({
 );
 
 // ── Settings modal ────────────────────────────────────────────────────────
-const SettingsModal: React.FC<{
+interface SettingsModalProps {
   approvalMode: ApprovalMode;
   onApprovalMode: (v: ApprovalMode) => void;
   selectedModel: string;
   onSelectModel: (v: string) => void;
   onClose: () => void;
-}> = ({ approvalMode, onApprovalMode, selectedModel, onSelectModel, onClose }) => {
+  user: AppUser | null;
+  userDetails: UserDetails | null;
+  onUpdateProfile: (details: Partial<UserDetails>) => Promise<{ error?: string; details?: UserDetails }>;
+}
+
+const SettingsModal: React.FC<SettingsModalProps> = ({
+  approvalMode,
+  onApprovalMode,
+  selectedModel,
+  onSelectModel,
+  onClose,
+  user,
+  userDetails,
+  onUpdateProfile,
+}) => {
+  const [activeTab, setActiveTab] = useState<'agent' | 'profile' | 'fabrication'>('agent');
   const [layers, setLayers] = useState<number>(() => Number(localStorage.getItem('antimatter_def_layers') || 2));
   const [finish, setFinish] = useState<string>(() => localStorage.getItem('antimatter_def_finish') || 'ENIG');
   const [mask, setMask] = useState<string>(() => localStorage.getItem('antimatter_def_mask') || 'black');
 
-  const handleSave = () => {
+  // Profile fields state
+  const [fullName, setFullName] = useState(userDetails?.full_name || user?.name || '');
+  const [role, setRole] = useState(userDetails?.role || 'Hardware Engineer');
+  const [organization, setOrganization] = useState(userDetails?.organization || '');
+  const [experienceLevel, setExperienceLevel] = useState(userDetails?.experience_level || 'Intermediate');
+  const [preferredEda, setPreferredEda] = useState(userDetails?.preferred_eda || 'KiCad 8');
+  const [preferredMcu, setPreferredMcu] = useState(userDetails?.preferred_mcu || 'ESP32 / ARM Cortex');
+  const [bio, setBio] = useState(userDetails?.bio || '');
+
+  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
+
+  const handleSaveFabrication = () => {
     localStorage.setItem('antimatter_def_layers', String(layers));
     localStorage.setItem('antimatter_def_finish', finish);
     localStorage.setItem('antimatter_def_mask', mask);
-    onClose();
+    setSaveStatus('Fabrication preferences saved!');
+    setTimeout(() => setSaveStatus(null), 2000);
+  };
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setSaveStatus(null);
+    try {
+      const res = await onUpdateProfile({
+        full_name: fullName,
+        role,
+        organization,
+        experience_level: experienceLevel,
+        preferred_eda: preferredEda,
+        preferred_mcu: preferredMcu,
+        bio,
+      });
+      if (res.error) {
+        setSaveStatus(`⚠️ ${res.error}`);
+      } else {
+        setSaveStatus('✓ Engineer profile synchronized successfully!');
+        setTimeout(() => setSaveStatus(null), 2500);
+      }
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <div
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.82)',
+        backdropFilter: 'blur(8px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        padding: '16px',
+      }}
       onClick={onClose}
     >
       <div
@@ -255,7 +400,7 @@ const SettingsModal: React.FC<{
           border: '1px solid rgba(0, 229, 255, 0.3)',
           borderRadius: '16px',
           padding: '24px',
-          width: '540px',
+          width: '580px',
           maxWidth: '94vw',
           maxHeight: '90vh',
           overflowY: 'auto',
@@ -263,109 +408,293 @@ const SettingsModal: React.FC<{
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ fontSize: '18px' }}>⚙</span>
-            <span style={{ fontSize: '16px', fontWeight: 700, color: '#f8fafc' }}>Platform & Agent Settings</span>
+            <span style={{ fontSize: '16px', fontWeight: 700, color: '#f8fafc' }}>Platform & Account Settings</span>
           </div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#64748b', fontSize: '18px' }}>✕</button>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-          {/* Managed Platform Badge */}
-          <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(0,229,255,0.06)', border: '1px solid rgba(0,229,255,0.2)', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ fontSize: '18px' }}>☁️</span>
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: '#00e5ff' }}>Fully Managed EDA Platform</div>
-              <div style={{ fontSize: '11px', color: '#94a3b8' }}>API keys, compute, KiCad compilation, and model routing are securely managed server-side.</div>
-            </div>
-          </div>
-
-          {/* 1. Agent Autonomy & Approval Behavior */}
-          <div>
-            <label style={settingLabel}>Agent Autonomy & Approval Mode</label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {[
-                { id: 'request_approval', title: '🛡️ Request Approval (Recommended)', desc: 'Agent requires confirmation for sensitive actions and prompts you on critical engineering crossroads.' },
-                { id: 'review', title: '👁️ Review Plans', desc: 'Agent formulates formal engineering change plans (ECOs) for your review before committing them to the board.' },
-                { id: 'auto_approve', title: '⚡ Auto-Approve (Autonomous)', desc: 'Agent executes continuously without stopping, adopting recommended component selections and committing S-expressions.' },
-              ].map((opt) => {
-                const isSel = approvalMode === opt.id;
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => onApprovalMode(opt.id as ApprovalMode)}
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'flex-start',
-                      padding: '10px 14px',
-                      borderRadius: '8px',
-                      border: isSel ? '1px solid #00e5ff' : '1px solid #1c2635',
-                      background: isSel ? 'rgba(0,229,255,0.08)' : '#0a0d16',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      transition: 'all 0.15s',
-                    }}
-                  >
-                    <span style={{ fontSize: '13px', fontWeight: isSel ? 700 : 500, color: isSel ? '#f8fafc' : '#cbd5e1' }}>{opt.title}</span>
-                    <span style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>{opt.desc}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* 2. Default AI Hardware Engine */}
-          <div>
-            <label style={settingLabel}>AI Hardware Synthesis Engine</label>
-            <select
-              value={selectedModel}
-              onChange={(e) => onSelectModel(e.target.value)}
-              style={settingInput}
+        {/* Tab Navigation */}
+        <div
+          style={{
+            display: 'flex',
+            background: '#0c0f18',
+            border: '1px solid #1c2332',
+            borderRadius: '8px',
+            padding: '3px',
+            marginBottom: '18px',
+            gap: '3px',
+          }}
+        >
+          {[
+            { id: 'agent', label: '🤖 Agent & Platform' },
+            { id: 'profile', label: '👤 Engineer Profile' },
+            { id: 'fabrication', label: '📐 Fabrication' },
+          ].map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setActiveTab(t.id as any)}
+              style={{
+                flex: 1,
+                padding: '7px 10px',
+                borderRadius: '6px',
+                fontSize: '12px',
+                fontWeight: 600,
+                border: 'none',
+                cursor: 'pointer',
+                transition: 'all 0.15s',
+                fontFamily: 'var(--font-mono)',
+                background: activeTab === t.id ? '#00e5ff' : 'transparent',
+                color: activeTab === t.id ? '#050b14' : '#64748b',
+                boxShadow: activeTab === t.id ? '0 0 12px rgba(0,229,255,0.3)' : 'none',
+              }}
             >
-              <option value="openrouter/auto">Antimatter Autonomous Engine (Recommended)</option>
-              <option value="anthropic/claude-3.7-sonnet">Deep Systems Architect</option>
-              <option value="openai/gpt-4o">High-Speed Hardware Synthesizer</option>
-              <option value="google/gemini-2.5-pro">Deep Technical Analyst</option>
-              <option value="deepseek/deepseek-r1">Mathematical Logic &amp; Verification</option>
-            </select>
-          </div>
-
-          {/* 3. PCB Fabrication Defaults */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
-            <div>
-              <label style={settingLabel}>Stackup</label>
-              <select value={layers} onChange={(e) => setLayers(Number(e.target.value))} style={settingInput}>
-                <option value={2}>2-Layer</option>
-                <option value={4}>4-Layer</option>
-              </select>
-            </div>
-            <div>
-              <label style={settingLabel}>Surface Finish</label>
-              <select value={finish} onChange={(e) => setFinish(e.target.value)} style={settingInput}>
-                <option value="ENIG">ENIG</option>
-                <option value="HASL">HASL</option>
-              </select>
-            </div>
-            <div>
-              <label style={settingLabel}>Mask Color</label>
-              <select value={mask} onChange={(e) => setMask(e.target.value)} style={settingInput}>
-                <option value="black">Matte Black</option>
-                <option value="green">Forest Green</option>
-                <option value="blue">Signal Blue</option>
-                <option value="purple">Royal Purple</option>
-              </select>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-            <button onClick={handleSave} style={{ padding: '8px 22px', borderRadius: '8px', border: 'none', background: '#00e5ff', color: '#050b14', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
-              Save Preferences
+              {t.label}
             </button>
-          </div>
+          ))}
         </div>
+
+        {saveStatus && (
+          <div
+            style={{
+              padding: '8px 12px',
+              borderRadius: '6px',
+              background: saveStatus.startsWith('⚠️') ? 'rgba(244,63,94,0.1)' : 'rgba(16,185,129,0.1)',
+              border: saveStatus.startsWith('⚠️') ? '1px solid rgba(244,63,94,0.3)' : '1px solid rgba(16,185,129,0.3)',
+              color: saveStatus.startsWith('⚠️') ? '#fda4af' : '#6ee7b7',
+              fontSize: '12px',
+              marginBottom: '14px',
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            {saveStatus}
+          </div>
+        )}
+
+        {/* TAB 1: Agent & Autonomy */}
+        {activeTab === 'agent' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(0,229,255,0.06)', border: '1px solid rgba(0,229,255,0.2)', display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '18px' }}>☁️</span>
+              <div>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: '#00e5ff' }}>Fully Managed EDA Platform</div>
+                <div style={{ fontSize: '11px', color: '#94a3b8' }}>API keys, compute, KiCad compilation, and model routing are securely managed server-side.</div>
+              </div>
+            </div>
+
+            <div>
+              <label style={settingLabel}>Agent Autonomy & Approval Mode</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {[
+                  { id: 'request_approval', title: '🛡️ Request Approval (Recommended)', desc: 'Agent requires confirmation for sensitive actions and prompts you on critical engineering crossroads.' },
+                  { id: 'review', title: '👁️ Review Plans', desc: 'Agent formulates formal engineering change plans (ECOs) for your review before committing them to the board.' },
+                  { id: 'auto_approve', title: '⚡ Auto-Approve (Autonomous)', desc: 'Agent executes continuously without stopping, adopting recommended component selections and committing S-expressions.' },
+                ].map((opt) => {
+                  const isSel = approvalMode === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => onApprovalMode(opt.id as ApprovalMode)}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'flex-start',
+                        padding: '10px 14px',
+                        borderRadius: '8px',
+                        border: isSel ? '1px solid #00e5ff' : '1px solid #1c2635',
+                        background: isSel ? 'rgba(0,229,255,0.08)' : '#0a0d16',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      <span style={{ fontSize: '13px', fontWeight: isSel ? 700 : 500, color: isSel ? '#f8fafc' : '#cbd5e1' }}>{opt.title}</span>
+                      <span style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>{opt.desc}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <label style={settingLabel}>AI Hardware Synthesis Engine</label>
+              <select
+                value={selectedModel}
+                onChange={(e) => onSelectModel(e.target.value)}
+                style={settingInput}
+              >
+                <option value="openrouter/auto">Antimatter Autonomous Engine (Recommended)</option>
+                <option value="anthropic/claude-3.7-sonnet">Deep Systems Architect</option>
+                <option value="openai/gpt-4o">High-Speed Hardware Synthesizer</option>
+                <option value="google/gemini-2.5-pro">Deep Technical Analyst</option>
+                <option value="deepseek/deepseek-r1">Mathematical Logic &amp; Verification</option>
+              </select>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 2: Engineer Profile */}
+        {activeTab === 'profile' && (
+          <form onSubmit={handleSaveProfile} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'rgba(255,255,255,0.03)', border: '1px solid #1e293b', borderRadius: '8px' }}>
+              <div>
+                <div style={{ fontSize: '11px', color: '#64748b', fontFamily: 'var(--font-mono)' }}>ACCOUNT IDENTITY</div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: '#f1f5f9' }}>{user?.email || 'Not logged in'}</div>
+              </div>
+              <span
+                style={{
+                  padding: '3px 8px',
+                  borderRadius: '4px',
+                  fontSize: '10px',
+                  fontFamily: 'var(--font-mono)',
+                  fontWeight: 700,
+                  background: user?.isGuest ? 'rgba(245,158,11,0.15)' : 'rgba(0,229,255,0.15)',
+                  color: user?.isGuest ? '#f59e0b' : '#00e5ff',
+                  border: user?.isGuest ? '1px solid rgba(245,158,11,0.3)' : '1px solid rgba(0,229,255,0.3)',
+                }}
+              >
+                {user?.isGuest ? 'SANDBOX GUEST' : 'SUPABASE AUTHENTICATED'}
+              </span>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div>
+                <label style={settingLabel}>Engineer Name</label>
+                <input
+                  type="text"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  style={settingInput}
+                  placeholder="e.g. Nicola Tesla"
+                />
+              </div>
+              <div>
+                <label style={settingLabel}>Organization / Lab</label>
+                <input
+                  type="text"
+                  value={organization}
+                  onChange={(e) => setOrganization(e.target.value)}
+                  style={settingInput}
+                  placeholder="e.g. Hardware R&D"
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div>
+                <label style={settingLabel}>Role Focus</label>
+                <select value={role} onChange={(e) => setRole(e.target.value)} style={settingInput}>
+                  <option value="Hardware Engineer">Hardware Engineer</option>
+                  <option value="PCB Designer">PCB Designer</option>
+                  <option value="Embedded/Firmware">Embedded/Firmware</option>
+                  <option value="Researcher/Student">Researcher/Student</option>
+                </select>
+              </div>
+              <div>
+                <label style={settingLabel}>Experience Level</label>
+                <select value={experienceLevel} onChange={(e) => setExperienceLevel(e.target.value)} style={settingInput}>
+                  <option value="Beginner">Beginner</option>
+                  <option value="Intermediate">Intermediate</option>
+                  <option value="Senior / Principal">Senior / Principal</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div>
+                <label style={settingLabel}>Target EDA Platform</label>
+                <select value={preferredEda} onChange={(e) => setPreferredEda(e.target.value)} style={settingInput}>
+                  <option value="KiCad 8">KiCad 8 (Native)</option>
+                  <option value="Altium Designer">Altium Designer</option>
+                  <option value="EasyEDA">EasyEDA</option>
+                  <option value="EAGLE">Autodesk EAGLE</option>
+                </select>
+              </div>
+              <div>
+                <label style={settingLabel}>Primary MCU Target</label>
+                <select value={preferredMcu} onChange={(e) => setPreferredMcu(e.target.value)} style={settingInput}>
+                  <option value="ESP32 / ARM Cortex">ESP32 / ARM Cortex</option>
+                  <option value="STM32 Series">STM32 Series</option>
+                  <option value="Nordic nRF52/nRF53">Nordic nRF52/nRF53</option>
+                  <option value="RP2040 / RP2350">RP2040 / RP2350</option>
+                  <option value="Microchip AVR / SAM">Microchip AVR / SAM</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label style={settingLabel}>Engineering Bio / Specialization</label>
+              <textarea
+                value={bio}
+                onChange={(e) => setBio(e.target.value)}
+                rows={2}
+                style={{ ...settingInput, height: 'auto', resize: 'vertical' }}
+                placeholder="High-speed digital routing, RF impedance matching, switched-mode power supplies..."
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '6px' }}>
+              <button
+                type="submit"
+                disabled={saving}
+                style={{
+                  padding: '9px 20px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: saving ? '#1c2a3a' : '#00e5ff',
+                  color: saving ? '#64748b' : '#050b14',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  cursor: saving ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.15s',
+                }}
+              >
+                {saving ? 'Syncing...' : 'Save Profile Changes'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* TAB 3: Fabrication Defaults */}
+        {activeTab === 'fabrication' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+              <div>
+                <label style={settingLabel}>Stackup</label>
+                <select value={layers} onChange={(e) => setLayers(Number(e.target.value))} style={settingInput}>
+                  <option value={2}>2-Layer</option>
+                  <option value={4}>4-Layer</option>
+                </select>
+              </div>
+              <div>
+                <label style={settingLabel}>Surface Finish</label>
+                <select value={finish} onChange={(e) => setFinish(e.target.value)} style={settingInput}>
+                  <option value="ENIG">ENIG</option>
+                  <option value="HASL">HASL</option>
+                </select>
+              </div>
+              <div>
+                <label style={settingLabel}>Mask Color</label>
+                <select value={mask} onChange={(e) => setMask(e.target.value)} style={settingInput}>
+                  <option value="black">Matte Black</option>
+                  <option value="green">Forest Green</option>
+                  <option value="blue">Signal Blue</option>
+                  <option value="purple">Royal Purple</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button onClick={handleSaveFabrication} style={{ padding: '8px 22px', borderRadius: '8px', border: 'none', background: '#00e5ff', color: '#050b14', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                Save Preferences
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -383,10 +712,17 @@ const settingInput: React.CSSProperties = {
 
 // ── Main App Content ──────────────────────────────────────────────────────
 const AntimatterAppContent: React.FC = () => {
-  const { user, session, signOut } = useAuth();
+  const { user, session, signOut, isRecoveryMode, userDetails, updateUserProfile, loading } = useAuth();
 
-  const [topView, setTopView] = useState<TopView>(() => user ? 'app' : 'landing');
-  const [authTab, setAuthTab]  = useState<AuthTab>('signin');
+  const [topView, setTopView] = useState<TopView>(() => (isRecoveryMode ? 'auth' : user ? 'app' : 'landing'));
+  const [authTab, setAuthTab]  = useState<AuthTab>(() => (isRecoveryMode ? 'reset_password' : 'signin'));
+
+  useEffect(() => {
+    if (isRecoveryMode) {
+      setAuthTab('reset_password');
+      setTopView('auth');
+    }
+  }, [isRecoveryMode]);
 
   useEffect(() => {
     if (!user && topView === 'app') setTopView('landing');
@@ -395,6 +731,19 @@ const AntimatterAppContent: React.FC = () => {
 
   // In-app routing
   const [appPage, setAppPage] = useState<AppPage>('home');
+
+  // Collapsible sidebar state (persisted)
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem('antimatter_sidebar_collapsed') === 'true';
+  });
+
+  const handleToggleSidebar = () => {
+    setIsSidebarCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem('antimatter_sidebar_collapsed', String(next));
+      return next;
+    });
+  };
 
   // Active dynamic project ID
   const [currentProjectId, setCurrentProjectId] = useState<string>(() => `antimatter-${Math.random().toString(16).slice(2, 10)}`);
@@ -513,6 +862,13 @@ const AntimatterAppContent: React.FC = () => {
 
     initApp();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-sync historical messages whenever project changes to maintain session memory
+  useEffect(() => {
+    if (currentProjectId) {
+      fetchProjectMessages(currentProjectId);
+    }
+  }, [currentProjectId, fetchProjectMessages]);
 
   const [showCreateProjectModal, setShowCreateProjectModal] = useState<boolean>(false);
 
@@ -835,7 +1191,7 @@ const AntimatterAppContent: React.FC = () => {
           ...d.state,
           schematic_sexpr: d.schematic_sexpr || p.schematic_sexpr,
           pcb_sexpr: d.pcb_sexpr || p.pcb_sexpr,
-          pending_eco: d.state?.pending_eco || (p.pending_eco ? { ...p.pending_eco, status: 'approved' } : null),
+          pending_eco: null, // Dismiss immediately upon approval
         } : d.state);
         setMessages((p) => [...p, { id: `sys-${Date.now()}`, role: 'assistant', content: `✓ **Plan Committed**: ${d.message}`, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
         
@@ -872,7 +1228,7 @@ const AntimatterAppContent: React.FC = () => {
       });
       setCircuitState((p) => p ? {
         ...p,
-        pending_eco: p.pending_eco ? { ...p.pending_eco, status: 'rejected' } : null,
+        pending_eco: null, // Dismiss immediately upon rejection
       } : null);
       setMessages((p) => [...p, { id: `sys-${Date.now()}`, role: 'assistant', content: 'Plan rejected.', timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
     } catch { /* ignore */ }
@@ -882,8 +1238,18 @@ const AntimatterAppContent: React.FC = () => {
   const handleExportZip  = () => window.open(`${API_BASE}/projects/${circuitState?.project_id || currentProjectId}/export`, '_blank');
   const handleSetMaskColor = (color: string) => handleSendMessage(`Change board solder mask color to ${color}`);
 
+  // ── RENDER: Loading Check ─────────────────────────────────────────────
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', width: '100vw', height: '100vh', alignItems: 'center', justifyContent: 'center', background: '#07080b', flexDirection: 'column', gap: '16px' }}>
+        <div style={{ width: '34px', height: '34px', border: '3px solid rgba(0,229,255,0.15)', borderTopColor: '#00e5ff', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+        <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', letterSpacing: '0.1em', color: '#64748b' }}>VERIFYING CREDENTIALS...</span>
+      </div>
+    );
+  }
+
   // ── RENDER: Landing ───────────────────────────────────────────────────
-  if (topView === 'landing') {
+  if (topView === 'landing' && !user) {
     return (
       <LandingPage
         onSignIn={() => { setAuthTab('signin'); setTopView('auth'); }}
@@ -892,19 +1258,18 @@ const AntimatterAppContent: React.FC = () => {
     );
   }
 
-  // ── RENDER: Auth ──────────────────────────────────────────────────────
-  if (topView === 'auth') {
+  // ── RENDER: Auth Page (Mandatory for unauthenticated access) ──────────
+  if (!user) {
     return (
       <AuthPage
-        initialTab={authTab}
+        initialTab={authTab === 'reset_password' ? 'reset_password' : 'signin'}
         onAuthenticated={() => { setTopView('app'); setAppPage('home'); }}
         onBack={() => setTopView('landing')}
       />
     );
   }
 
-  // ── RENDER: App Shell ─────────────────────────────────────────────────
-  if (!user) { setTopView('landing'); return null; }
+  // ── RENDER: App Shell (Strictly authenticated only) ────────────────────
   const userName = user.name || user.email.split('@')[0];
 
   return (
@@ -918,6 +1283,8 @@ const AntimatterAppContent: React.FC = () => {
         onSignOut={signOut}
         onOpenSettings={() => setShowSettings(true)}
         onNewChat={handleNewChat}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapse={handleToggleSidebar}
       />
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
@@ -946,7 +1313,10 @@ const AntimatterAppContent: React.FC = () => {
             isStreaming={isStreaming}
             currentThought={currentThought}
             pendingEco={
-              circuitState?.pending_eco && (!circuitState.pending_eco.project_id || circuitState.pending_eco.project_id === (currentProjectId || circuitState.project_id))
+              circuitState?.pending_eco &&
+              (!circuitState.pending_eco.project_id || circuitState.pending_eco.project_id === (currentProjectId || circuitState.project_id)) &&
+              circuitState.pending_eco.status !== 'approved' &&
+              circuitState.pending_eco.status !== 'rejected'
                 ? circuitState.pending_eco
                 : null
             }
@@ -1003,6 +1373,9 @@ const AntimatterAppContent: React.FC = () => {
           selectedModel={selectedModel}
           onSelectModel={handleSelectModel}
           onClose={() => setShowSettings(false)}
+          user={user}
+          userDetails={userDetails}
+          onUpdateProfile={updateUserProfile}
         />
       )}
     </div>

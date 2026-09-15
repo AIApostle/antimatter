@@ -52,6 +52,7 @@ class DatabaseManager:
     def __init__(self):
         self.config = SupabaseConfig()
         self.client: Optional[Client] = None
+        self.admin_client: Optional[Client] = None
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="db_sync")
         self._pending_upserts: Dict[str, Any] = {}
         self._scheduled_projects: set = set()
@@ -63,13 +64,22 @@ class DatabaseManager:
         self._local_chat: Dict[str, List[Dict[str, Any]]] = {}
 
     def _init_client(self):
-        if SUPABASE_INSTALLED and self.config.supabase_url and self.config.supabase_key:
-            try:
-                self.client = create_client(self.config.supabase_url, self.config.supabase_key)
-                logger.info("[Database] Connected to cloud storage")
-            except Exception as e:
-                logger.warning("[Database] Connection failed, using local storage: %s", e)
-                self.client = None
+        if SUPABASE_INSTALLED and self.config.supabase_url:
+            if self.config.supabase_key:
+                try:
+                    self.client = create_client(self.config.supabase_url, self.config.supabase_key)
+                    logger.info("[Database] Connected to cloud storage")
+                except Exception as e:
+                    logger.warning("[Database] Connection failed, using local storage: %s", e)
+                    self.client = None
+
+            if self.config.supabase_service_role_key:
+                try:
+                    self.admin_client = create_client(self.config.supabase_url, self.config.supabase_service_role_key)
+                    logger.info("[Database] Admin service client initialized")
+                except Exception as e:
+                    logger.warning("[Database] Admin client init failed: %s", e)
+                    self.admin_client = None
         else:
             logger.info("[Database] Active in local storage mode.")
 
@@ -271,11 +281,16 @@ class DatabaseManager:
         return self._local_projects.get(project_id)
 
     def delete_project(self, project_id: str) -> bool:
-        """Delete project from cache, disk, and cloud."""
+        """Delete project from cache, disk, and Supabase cloud database."""
+        # 1. Clear in-memory cache and cancel any pending debounced upsert
         self._local_projects.pop(project_id, None)
         self._local_plans.pop(project_id, None)
         self._local_chat.pop(project_id, None)
+        with self._upsert_lock:
+            self._pending_upserts.pop(project_id, None)
+            self._scheduled_projects.discard(project_id)
 
+        # 2. Delete from disk cache
         disk_projects = self._load_disk_projects()
         if project_id in disk_projects:
             disk_projects.pop(project_id, None)
@@ -286,15 +301,24 @@ class DatabaseManager:
             disk_plans.pop(project_id, None)
             self._save_disk_plans(disk_plans)
 
-        if self.client:
-            def _bg_delete():
-                try:
-                    self.client.table("chat_messages").delete().eq("project_id", project_id).execute()
-                    self.client.table("design_plans").delete().eq("project_id", project_id).execute()
-                    self.client.table("projects").delete().eq("id", project_id).execute()
-                except Exception as e:
-                    logger.debug("[Database] Failed to delete project: %s", e)
-            self._executor.submit(_bg_delete)
+        # 3. Synchronously delete from Supabase tables
+        client = self.admin_client or self.client
+        if client:
+            try:
+                client.table("chat_messages").delete().eq("project_id", project_id).execute()
+            except Exception as e:
+                logger.warning("[Database] Error deleting chat messages for project %s: %s", project_id, e)
+
+            try:
+                client.table("design_plans").delete().eq("project_id", project_id).execute()
+            except Exception as e:
+                logger.warning("[Database] Error deleting design plans for project %s: %s", project_id, e)
+
+            try:
+                res = client.table("projects").delete().eq("id", project_id).execute()
+                logger.info("[Database] Successfully deleted project '%s' from Supabase projects table.", project_id)
+            except Exception as e:
+                logger.warning("[Database] Error deleting project %s from Supabase: %s", project_id, e)
 
         return True
 
@@ -469,9 +493,10 @@ class DatabaseManager:
         """Fetch user profile and engineering details from Supabase."""
         if not user_id:
             return None
-        if self.client:
+        active_client = self.admin_client or self.client
+        if active_client:
             try:
-                res = self.client.table("user_details").select("*").eq("id", user_id).maybe_single().execute()
+                res = active_client.table("user_details").select("*").eq("id", user_id).maybe_single().execute()
                 if res and res.data:
                     return res.data
             except Exception as e:
@@ -479,7 +504,7 @@ class DatabaseManager:
 
             # Fallback to profiles table
             try:
-                p_res = self.client.table("profiles").select("*").eq("id", user_id).maybe_single().execute()
+                p_res = active_client.table("profiles").select("*").eq("id", user_id).maybe_single().execute()
                 if p_res and p_res.data:
                     return p_res.data
             except Exception as e:
@@ -490,7 +515,8 @@ class DatabaseManager:
         """Upsert user profile and engineering preferences."""
         if not user_id:
             return False
-        if self.client:
+        active_client = self.admin_client or self.client
+        if active_client:
             try:
                 payload = {
                     "id": user_id,
@@ -503,7 +529,7 @@ class DatabaseManager:
                 ]:
                     if field in details and details[field] is not None:
                         payload[field] = details[field]
-                self.client.table("user_details").upsert(payload).execute()
+                active_client.table("user_details").upsert(payload).execute()
 
                 # Also update profiles table for backward compatibility if present
                 try:
@@ -519,7 +545,7 @@ class DatabaseManager:
                         prof_payload["bio"] = details["bio"]
                     if "experience_level" in details:
                         prof_payload["preferred_level"] = details["experience_level"]
-                    self.client.table("profiles").upsert(prof_payload).execute()
+                    active_client.table("profiles").upsert(prof_payload).execute()
                 except Exception:
                     pass
 
@@ -527,6 +553,40 @@ class DatabaseManager:
             except Exception as e:
                 logger.warning("[Supabase] Failed to save user details: %s", e)
         return True
+
+    def ensure_user_profile(
+        self,
+        user_id: str,
+        email: str,
+        full_name: Optional[str] = None,
+        role: Optional[str] = None,
+        experience_level: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Ensure both profiles and user_details records exist and return merged user details."""
+        existing = self.get_user_details(user_id)
+        name = full_name or (existing or {}).get("full_name") or (metadata or {}).get("full_name") or (metadata or {}).get("name") or email.split("@")[0]
+        user_role = role or (existing or {}).get("role") or (metadata or {}).get("role") or "Hardware Engineer"
+        level = experience_level or (existing or {}).get("experience_level") or (metadata or {}).get("experience_level") or "Intermediate"
+
+        details = {
+            **(existing or {}),
+            "id": user_id,
+            "email": email,
+            "full_name": name,
+            "role": user_role,
+            "experience_level": level,
+            "preferred_eda": (existing or {}).get("preferred_eda") or "KiCad 8",
+            "preferred_mcu": (existing or {}).get("preferred_mcu") or "ESP32 / ARM Cortex",
+            "settings": (existing or {}).get("settings") or {
+                "theme": "dark",
+                "auto_drc": True,
+                "default_layer_count": 2,
+                "default_board_finish": "ENIG",
+            },
+        }
+        self.save_user_details(user_id, details)
+        return details
 
 
 # Global database manager singleton

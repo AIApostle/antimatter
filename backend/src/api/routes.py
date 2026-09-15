@@ -426,6 +426,23 @@ async def export_project_zip(project_id: str):
     )
 
 
+@router.get("/projects/{project_id}/glb")
+async def get_project_glb(project_id: str):
+    """Serve native KiCad 3D GLB model with physical copper traces, pads, silkscreen, and component geometry."""
+    glb_bytes = project_manager.export_kicad_glb(project_id)
+    if not glb_bytes:
+        raise HTTPException(status_code=404, detail="GLB model generation failed or project not found")
+    return Response(
+        content=glb_bytes,
+        media_type="model/gltf-binary",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Content-Disposition": f"inline; filename={project_id}.glb",
+        },
+    )
+
+
+
 class CreateProjectRequest(BaseModel):
     project_id: str
     project_name: str
